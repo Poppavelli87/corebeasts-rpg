@@ -32,6 +32,11 @@ type StarterUi = {
   type: Phaser.GameObjects.Text;
 };
 
+type StarterKeys = Record<
+  'LEFT' | 'RIGHT' | 'A' | 'D' | 'ENTER' | 'SPACE' | 'ESC',
+  Phaser.Input.Keyboard.Key
+>;
+
 const STARTER_OPTIONS: StarterOption[] = [
   { id: 'embercub', typeLabel: 'EMBER' },
   { id: 'tidepup', typeLabel: 'TIDE' },
@@ -45,13 +50,32 @@ export class StarterSelectionScene extends Phaser.Scene {
 
   private selectedIndex = 0;
 
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
+  private keys!: StarterKeys;
 
-  private wasd!: Record<'a' | 'd', Phaser.Input.Keyboard.Key>;
+  private keyboard: Phaser.Input.Keyboard.KeyboardPlugin | null = null;
 
-  private enterKey!: Phaser.Input.Keyboard.Key;
+  private isTransitioning = false;
 
-  private escKey!: Phaser.Input.Keyboard.Key;
+  private inputLocked = false;
+
+  private hasReceivedInput = false;
+
+  private inputWatchdog: Phaser.Time.TimerEvent | null = null;
+
+  private pointerFocusHandler = (): void => {
+    this.focusCanvas();
+  };
+
+  private keydownHandlers: Array<{
+    event: string;
+    handler: (event: KeyboardEvent) => void;
+  }> = [];
+
+  private actionCooldownMs = 80;
+
+  private actionTimestamps: Record<string, number> = {};
+
+  private devLastKeyText: Phaser.GameObjects.Text | null = null;
 
   public constructor() {
     super(SCENE_KEYS.STARTER_SELECTION);
@@ -60,6 +84,10 @@ export class StarterSelectionScene extends Phaser.Scene {
   public create(): void {
     this.audio = new AudioSystem(this);
     this.audio.playMusic('title');
+    this.isTransitioning = false;
+    this.inputLocked = false;
+    this.hasReceivedInput = false;
+    this.actionTimestamps = {};
 
     const { width, height } = this.scale;
     this.add.rectangle(0, 0, width, height, 0x030813, 1).setOrigin(0);
@@ -132,6 +160,7 @@ export class StarterSelectionScene extends Phaser.Scene {
         this.refreshSelection();
       });
       frame.on('pointerdown', () => {
+        this.hasReceivedInput = true;
         this.selectedIndex = index;
         this.refreshSelection();
         this.confirmSelection();
@@ -147,48 +176,49 @@ export class StarterSelectionScene extends Phaser.Scene {
       });
     });
 
-    this.cursors = this.input.keyboard!.createCursorKeys();
-    this.wasd = {
-      a: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-      d: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D)
-    };
-    this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
-    this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.bindInputs();
 
     this.refreshSelection();
+
+    if (import.meta.env.DEV) {
+      this.devLastKeyText = this.add
+        .text(width - 6, 6, 'Last: NONE', {
+          fontFamily: UI_THEME.fontFamily,
+          fontSize: '12px',
+          color: '#9ecbea',
+          backgroundColor: '#000000aa',
+          padding: { x: 4, y: 2 }
+        })
+        .setOrigin(1, 0)
+        .setDepth(5000);
+    }
   }
 
   public update(): void {
-    const leftPressed =
-      Phaser.Input.Keyboard.JustDown(this.cursors.left!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.a);
-    const rightPressed =
-      Phaser.Input.Keyboard.JustDown(this.cursors.right!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.d);
-
-    if (leftPressed) {
-      this.selectedIndex =
-        (this.selectedIndex - 1 + STARTER_OPTIONS.length) % STARTER_OPTIONS.length;
-      this.audio.playMenuMove();
-      this.refreshSelection();
+    if (!this.keys) {
       return;
     }
 
-    if (rightPressed) {
-      this.selectedIndex = (this.selectedIndex + 1) % STARTER_OPTIONS.length;
-      this.audio.playMenuMove();
-      this.refreshSelection();
-      return;
+    if (
+      Phaser.Input.Keyboard.JustDown(this.keys.LEFT) ||
+      Phaser.Input.Keyboard.JustDown(this.keys.A)
+    ) {
+      this.moveSelection(-1, 'LEFT');
     }
-
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
-      this.audio.playMenuBack();
-      this.scene.start(SCENE_KEYS.INTRO);
-      return;
+    if (
+      Phaser.Input.Keyboard.JustDown(this.keys.RIGHT) ||
+      Phaser.Input.Keyboard.JustDown(this.keys.D)
+    ) {
+      this.moveSelection(1, 'RIGHT');
     }
-
-    if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
-      this.confirmSelection();
+    if (
+      Phaser.Input.Keyboard.JustDown(this.keys.ENTER) ||
+      Phaser.Input.Keyboard.JustDown(this.keys.SPACE)
+    ) {
+      this.handleConfirmInput('ENTER');
+    }
+    if (Phaser.Input.Keyboard.JustDown(this.keys.ESC)) {
+      this.handleBackInput('ESC');
     }
   }
 
@@ -204,6 +234,10 @@ export class StarterSelectionScene extends Phaser.Scene {
   }
 
   private confirmSelection(): void {
+    if (this.isTransitioning || this.inputLocked) {
+      return;
+    }
+
     const selected = STARTER_OPTIONS[this.selectedIndex];
     if (!selected) {
       return;
@@ -239,9 +273,169 @@ export class StarterSelectionScene extends Phaser.Scene {
     const spawn = MAP_DEFINITIONS.starterTown.spawn;
     movePlayerTo(gameState, 'starterTown', spawn.x, spawn.y);
 
+    this.isTransitioning = true;
+    this.inputLocked = true;
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       this.scene.start(SCENE_KEYS.OVERWORLD);
     });
     this.cameras.main.fadeOut(260, 0, 0, 0);
+  }
+
+  private bindInputs(): void {
+    this.keyboard = this.input.keyboard ?? null;
+    if (!this.keyboard) {
+      return;
+    }
+
+    this.keys = this.keyboard.addKeys({
+      LEFT: Phaser.Input.Keyboard.KeyCodes.LEFT,
+      RIGHT: Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      A: Phaser.Input.Keyboard.KeyCodes.A,
+      D: Phaser.Input.Keyboard.KeyCodes.D,
+      ENTER: Phaser.Input.Keyboard.KeyCodes.ENTER,
+      SPACE: Phaser.Input.Keyboard.KeyCodes.SPACE,
+      ESC: Phaser.Input.Keyboard.KeyCodes.ESC
+    }) as StarterKeys;
+
+    this.rebindKeyboardEvents(false);
+    this.input.on('pointerdown', this.pointerFocusHandler);
+    this.focusCanvas();
+
+    this.inputWatchdog?.remove(false);
+    this.inputWatchdog = this.time.delayedCall(3000, () => {
+      if (this.hasReceivedInput || !this.keyboard) {
+        return;
+      }
+
+      if (import.meta.env.DEV) {
+        console.warn(
+          '[StarterSelectionScene] No input detected after 3s. Rebinding keyboard listeners.'
+        );
+      }
+      this.rebindKeyboardEvents(true);
+      this.focusCanvas();
+    });
+
+    const cleanup = (): void => {
+      this.inputWatchdog?.remove(false);
+      this.inputWatchdog = null;
+      this.input.off('pointerdown', this.pointerFocusHandler);
+      this.removeKeyboardEvents();
+    };
+
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, cleanup);
+    this.events.once(Phaser.Scenes.Events.DESTROY, cleanup);
+  }
+
+  private rebindKeyboardEvents(forceRebind: boolean): void {
+    if (!this.keyboard) {
+      return;
+    }
+
+    if (forceRebind) {
+      this.removeKeyboardEvents();
+    }
+
+    this.addKeydownListener('keydown-LEFT', () => this.moveSelection(-1, 'LEFT'));
+    this.addKeydownListener('keydown-RIGHT', () => this.moveSelection(1, 'RIGHT'));
+    this.addKeydownListener('keydown-A', () => this.moveSelection(-1, 'A'));
+    this.addKeydownListener('keydown-D', () => this.moveSelection(1, 'D'));
+    this.addKeydownListener('keydown-ENTER', () => this.handleConfirmInput('ENTER'));
+    this.addKeydownListener('keydown-SPACE', () => this.handleConfirmInput('SPACE'));
+    this.addKeydownListener('keydown-ESC', () => this.handleBackInput('ESC'));
+  }
+
+  private addKeydownListener(event: string, handler: (event: KeyboardEvent) => void): void {
+    if (!this.keyboard) {
+      return;
+    }
+
+    this.keyboard.on(event, handler);
+    this.keydownHandlers.push({ event, handler });
+  }
+
+  private removeKeyboardEvents(): void {
+    if (!this.keyboard) {
+      return;
+    }
+
+    this.keydownHandlers.forEach(({ event, handler }) => {
+      this.keyboard?.off(event, handler);
+    });
+    this.keydownHandlers = [];
+  }
+
+  private moveSelection(direction: -1 | 1, keyLabel: string): void {
+    if (!this.canProcessAction(`move_${direction}`)) {
+      return;
+    }
+
+    this.registerInput(keyLabel);
+    if (this.isTransitioning || this.inputLocked) {
+      return;
+    }
+
+    this.selectedIndex =
+      (this.selectedIndex + direction + STARTER_OPTIONS.length) % STARTER_OPTIONS.length;
+    this.audio.playMenuMove();
+    this.refreshSelection();
+  }
+
+  private handleConfirmInput(keyLabel: string): void {
+    if (!this.canProcessAction('confirm')) {
+      return;
+    }
+
+    this.registerInput(keyLabel);
+    if (this.isTransitioning || this.inputLocked) {
+      return;
+    }
+    this.confirmSelection();
+  }
+
+  private handleBackInput(keyLabel: string): void {
+    if (!this.canProcessAction('back')) {
+      return;
+    }
+
+    this.registerInput(keyLabel);
+    if (this.isTransitioning) {
+      return;
+    }
+
+    this.audio.playMenuBack();
+    this.isTransitioning = true;
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.scene.start(SCENE_KEYS.TITLE);
+    });
+    this.cameras.main.fadeOut(200, 0, 0, 0);
+  }
+
+  private canProcessAction(actionId: string): boolean {
+    const now = this.time.now;
+    const previous = this.actionTimestamps[actionId] ?? -Infinity;
+    if (now - previous < this.actionCooldownMs) {
+      return false;
+    }
+
+    this.actionTimestamps[actionId] = now;
+    return true;
+  }
+
+  private registerInput(keyLabel: string): void {
+    this.hasReceivedInput = true;
+    this.devLastKeyText?.setText(`Last: ${keyLabel}`);
+  }
+
+  private focusCanvas(): void {
+    const canvas = this.game.canvas as HTMLCanvasElement | null;
+    if (!canvas) {
+      return;
+    }
+
+    if (!canvas.hasAttribute('tabindex')) {
+      canvas.setAttribute('tabindex', '0');
+    }
+    canvas.focus();
   }
 }

@@ -516,3 +516,22 @@ Original prompt: Create a new folder "corebeasts-rpg" and build a working Phaser
   - `npm run build:desktop` passed (`release/desktop/win-unpacked`).
   - `npm run build:desktop:win` passed (portable + NSIS installer artifacts).
 - No gameplay logic changes were introduced in Benchmark 11; this pass was packaging/docs/tooling only.
+- Fixed StarterSelectionScene input freeze/regression (Benchmark 11 follow-up bugfix):
+  - Reworked input binding to be robust in `create()` using both `addKeys` and explicit `keydown-*` listeners for LEFT/RIGHT/A/D/ENTER/SPACE/ESC.
+  - Added canvas focus recovery (`tabindex` + `canvas.focus()`), plus pointerdown handler to restore focus.
+  - Added startup watchdog: if no input received after 3s, DEV log + keyboard listener rebind.
+  - Added transition/input guards so input cannot lock permanently; Esc is allowed unless transition is already active.
+  - Esc now always backs out with cancel SFX and fade transition to `TitleScene`.
+  - Added proper listener cleanup on scene `shutdown` and `destroy` to avoid duplicate handlers.
+  - Added DEV-only "Last: <key>" indicator in StarterSelectionScene corner.
+- Validation:
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Playwright direct control check output (`output/benchmark11-starter-controls.json`) confirms:
+    - ArrowRight changes index 0 -> 1
+    - ArrowLeft changes index 1 -> 0
+    - D/A keys also change index
+    - blur + click canvas restores keyboard control (index updates)
+    - Escape returns to `TitleScene`
+    - Enter confirms and transitions to `OverworldScene`
+  - No console/page errors in that run (`errors: []`).

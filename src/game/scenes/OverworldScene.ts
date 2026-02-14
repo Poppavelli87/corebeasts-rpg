@@ -3,6 +3,7 @@ import { CREATURE_DEFINITIONS, getCreatureDefinition, type CreatureId } from '..
 import { SCENE_KEYS } from '../constants';
 import { AudioSystem } from '../systems/AudioSystem';
 import { DialogSystem } from '../systems/DialogSystem';
+import { InputAdapter } from '../systems/InputAdapter';
 import { ProcSpriteFactory } from '../systems/ProcSpriteFactory';
 import { SaveSystem } from '../systems/SaveSystem';
 import {
@@ -408,10 +409,10 @@ export class OverworldScene extends Phaser.Scene {
   private pickups: PickupInstance[] = [];
   private activeTrainerEncounter: ActiveTrainerEncounter | null = null;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private moveKeys!: Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
   private enterKey!: Phaser.Input.Keyboard.Key;
   private escKey!: Phaser.Input.Keyboard.Key;
   private minimapKey!: Phaser.Input.Keyboard.Key;
+  private inputAdapter!: InputAdapter;
   private minimapOpen = false;
   private minimapLayer?: Phaser.GameObjects.Container;
   private minimapPlayerDot?: Phaser.GameObjects.Rectangle;
@@ -445,15 +446,10 @@ export class OverworldScene extends Phaser.Scene {
       .setDepth(500);
 
     this.cursors = this.input.keyboard!.createCursorKeys();
-    this.moveKeys = {
-      w: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-      a: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-      s: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-      d: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D)
-    };
     this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     this.minimapKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.M);
+    this.inputAdapter = new InputAdapter(this);
 
     if (import.meta.env.DEV) {
       this.warpKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.P);
@@ -506,8 +502,11 @@ export class OverworldScene extends Phaser.Scene {
       return;
     }
 
+    const cancelPressed = this.inputAdapter.consume('cancel');
+    const menuPressed = this.inputAdapter.consume('menu');
+
     if (
-      Phaser.Input.Keyboard.JustDown(this.escKey) &&
+      (cancelPressed || menuPressed) &&
       !this.dialogSystem.isActive() &&
       !this.isTransitioning &&
       !this.isMoving &&
@@ -518,7 +517,7 @@ export class OverworldScene extends Phaser.Scene {
       return;
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (this.inputAdapter.consume('confirm') || Phaser.Input.Keyboard.JustDown(this.enterKey)) {
       if (this.dialogSystem.isActive()) {
         this.audio.beep({ frequency: 690, durationMs: 65 });
         this.dialogSystem.advance();
@@ -656,32 +655,24 @@ export class OverworldScene extends Phaser.Scene {
   }
 
   private resolveMovementInput(): InputDirection | null {
-    const leftPressed =
-      Phaser.Input.Keyboard.JustDown(this.cursors.left!) ||
-      Phaser.Input.Keyboard.JustDown(this.moveKeys.a);
-    const rightPressed =
-      Phaser.Input.Keyboard.JustDown(this.cursors.right!) ||
-      Phaser.Input.Keyboard.JustDown(this.moveKeys.d);
-    const upPressed =
-      Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
-      Phaser.Input.Keyboard.JustDown(this.moveKeys.w);
-    const downPressed =
-      Phaser.Input.Keyboard.JustDown(this.cursors.down!) ||
-      Phaser.Input.Keyboard.JustDown(this.moveKeys.s);
+    const leftPressed = this.inputAdapter.consume('navLeft');
+    const rightPressed = this.inputAdapter.consume('navRight');
+    const upPressed = this.inputAdapter.consume('navUp');
+    const downPressed = this.inputAdapter.consume('navDown');
 
-    if (upPressed || this.cursors.up!.isDown || this.moveKeys.w.isDown) {
+    if (upPressed || this.inputAdapter.isHeld('navUp')) {
       return { direction: 'up', deltaX: 0, deltaY: -1 };
     }
 
-    if (downPressed || this.cursors.down!.isDown || this.moveKeys.s.isDown) {
+    if (downPressed || this.inputAdapter.isHeld('navDown')) {
       return { direction: 'down', deltaX: 0, deltaY: 1 };
     }
 
-    if (leftPressed || this.cursors.left!.isDown || this.moveKeys.a.isDown) {
+    if (leftPressed || this.inputAdapter.isHeld('navLeft')) {
       return { direction: 'left', deltaX: -1, deltaY: 0 };
     }
 
-    if (rightPressed || this.cursors.right!.isDown || this.moveKeys.d.isDown) {
+    if (rightPressed || this.inputAdapter.isHeld('navRight')) {
       return { direction: 'right', deltaX: 1, deltaY: 0 };
     }
 

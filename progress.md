@@ -535,3 +535,39 @@ Original prompt: Create a new folder "corebeasts-rpg" and build a working Phaser
     - Escape returns to `TitleScene`
     - Enter confirms and transitions to `OverworldScene`
   - No console/page errors in that run (`errors: []`).
+- UX patch follow-up (Main Menu + debug overlay):
+  - Added safety guard in `src/game/scenes/DebugOverlayScene.ts` so the debug scene self-stops immediately when `import.meta.env.DEV` is false.
+  - Retained dev behavior (scene active and backtick-toggleable in dev).
+- Validation (follow-up):
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Production preview check (`output/prod-overlay-check.json`): active scenes only include `TitleScene`, `debugRegistered: false`, and no FPS/Scene text objects.
+  - Main Menu functional flow check (`output/party-main-menu-flow-functional.json`) confirms Overworld -> Party -> Main Menu confirm returns to `TitleScene` and save key remains present.
+- Implemented mobile controls + responsive UI benchmark (no gameplay rule changes).
+  - Added `src/game/systems/Device.ts` with `isTouchDevice()`, `isSmallScreen()`, and safe-area inset reader.
+  - Added `src/game/systems/InputAdapter.ts` to unify high-level actions (`navUp/navDown/navLeft/navRight/confirm/cancel/menu`) from keyboard + touch.
+  - Added `src/game/ui/TouchControls.ts` with on-screen virtual controls (D-pad, A, B, MENU), safe-area-aware fixed overlay, and per-scene listener subscription.
+- Scene integrations:
+  - `OverworldScene`: movement and interactions now consume InputAdapter actions; touch `MENU` opens pause menu.
+  - `BattleScene`: command/move/bag/switch/replace input now consumes InputAdapter actions; small-screen touch mode shifts battle panel up to reduce overlap.
+  - `PartyScene`: navigation/confirm/back now consume InputAdapter actions; touch `B`/`MENU` works as cancel/back.
+  - `TitleScene`: navigation/confirm/back now consume InputAdapter actions and added mobile fullscreen button (top-right).
+  - `StarterSelectionScene`: added touch action consumption (left/right/confirm/back) while preserving robust keyboard bindings.
+  - `IntroScene`/`CreditsScene`: confirm/back now consume InputAdapter actions.
+- Mobile web UX hardening:
+  - Updated `src/style.css` with `touch-action:none`, `overscroll-behavior:none`, `user-select:none`, and touch-control styling.
+  - Updated `index.html` viewport meta for mobile (`viewport-fit=cover`, no user zoom).
+  - Updated `src/main.ts` to prevent canvas-only touch scroll/gesture defaults.
+  - Updated `src/game/ui/UiTheme.ts` back-hint positioning to honor safe-area insets.
+- README updated with mobile controls and fullscreen button note.
+- Validation:
+  - `npm run format:fix` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Playwright smoke client run completed: `output/mobile-patch-smoke/` (no emitted errors JSON).
+  - Mobile touch integration check passed (`output/mobile-touch-check.json`):
+    - touch controls visible on title,
+    - reach overworld,
+    - MENU tap opens Party,
+    - B tap closes Party back to Overworld,
+    - no console errors.

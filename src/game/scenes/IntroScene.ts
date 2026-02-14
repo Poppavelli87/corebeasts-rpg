@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { SCENE_KEYS } from '../constants';
 import { getActiveGameState } from '../state/GameState';
 import { AudioSystem } from '../systems/AudioSystem';
+import { InputAdapter } from '../systems/InputAdapter';
 import { getDialogCharsPerSecond, getUserSettings } from '../systems/UserSettings';
 import { UI_THEME } from '../ui/UiTheme';
 
@@ -65,7 +66,7 @@ export class IntroScene extends Phaser.Scene {
 
   private nameValue = 'Player';
 
-  private enterKey!: Phaser.Input.Keyboard.Key;
+  private inputAdapter!: InputAdapter;
 
   private revealEvent: Phaser.Time.TimerEvent | null = null;
 
@@ -158,8 +159,8 @@ export class IntroScene extends Phaser.Scene {
     });
     this.hintText.setOrigin(1, 1);
 
-    this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
     this.input.keyboard!.on('keydown', this.keydownHandler);
+    this.inputAdapter = new InputAdapter(this);
 
     this.showLine(PRE_NAME_LINES[this.preLineIndex]);
 
@@ -170,12 +171,17 @@ export class IntroScene extends Phaser.Scene {
   }
 
   public update(): void {
-    if (!Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (!this.inputAdapter.consume('confirm')) {
       return;
     }
 
     if (this.revealing) {
       this.finishReveal();
+      return;
+    }
+
+    if (this.phase === 'naming') {
+      this.confirmName();
       return;
     }
 

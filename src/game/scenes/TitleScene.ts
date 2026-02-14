@@ -9,6 +9,8 @@ import {
   type DifficultyMode
 } from '../state/GameState';
 import { AudioSystem } from '../systems/AudioSystem';
+import { getSafeAreaInsets, isSmallScreen, isTouchDevice } from '../systems/Device';
+import { InputAdapter } from '../systems/InputAdapter';
 import { SaveSystem } from '../systems/SaveSystem';
 import {
   UI_THEME,
@@ -44,13 +46,8 @@ export class TitleScene extends Phaser.Scene {
 
   private panelHeading!: Phaser.GameObjects.Text;
 
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-
-  private enterKey!: Phaser.Input.Keyboard.Key;
-
-  private escKey!: Phaser.Input.Keyboard.Key;
-
   private audio!: AudioSystem;
+  private inputAdapter!: InputAdapter;
 
   private hasContinueSave = false;
 
@@ -169,24 +166,23 @@ export class TitleScene extends Phaser.Scene {
       depth: this.panelBox.depth + 1
     }).setVisible(false);
 
-    this.cursors = this.input.keyboard!.createCursorKeys();
-    this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
-    this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.inputAdapter = new InputAdapter(this);
+    this.createMobileFullscreenButton();
 
     this.refreshMenu();
   }
 
   public update(): void {
     if (this.panelMode === 'none') {
-      if (Phaser.Input.Keyboard.JustDown(this.cursors.up!)) {
+      if (this.inputAdapter.consume('navUp')) {
         this.moveSelection(-1);
       }
 
-      if (Phaser.Input.Keyboard.JustDown(this.cursors.down!)) {
+      if (this.inputAdapter.consume('navDown')) {
         this.moveSelection(1);
       }
 
-      if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+      if (this.inputAdapter.consume('confirm')) {
         this.confirmSelection();
       }
 
@@ -194,10 +190,10 @@ export class TitleScene extends Phaser.Scene {
     }
 
     if (this.panelMode === 'settings') {
-      const leftPressed = Phaser.Input.Keyboard.JustDown(this.cursors.left!);
-      const rightPressed = Phaser.Input.Keyboard.JustDown(this.cursors.right!);
-      const upPressed = Phaser.Input.Keyboard.JustDown(this.cursors.up!);
-      const downPressed = Phaser.Input.Keyboard.JustDown(this.cursors.down!);
+      const leftPressed = this.inputAdapter.consume('navLeft');
+      const rightPressed = this.inputAdapter.consume('navRight');
+      const upPressed = this.inputAdapter.consume('navUp');
+      const downPressed = this.inputAdapter.consume('navDown');
 
       if (upPressed || downPressed) {
         this.settingsIndex = Phaser.Math.Wrap(this.settingsIndex + (upPressed ? -1 : 1), 0, 2);
@@ -211,17 +207,17 @@ export class TitleScene extends Phaser.Scene {
         return;
       }
 
-      if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+      if (this.inputAdapter.consume('confirm')) {
         this.applySettingsAdjust(1);
         return;
       }
     }
 
     if (this.panelMode === 'newGamePlus') {
-      const leftPressed = Phaser.Input.Keyboard.JustDown(this.cursors.left!);
-      const rightPressed = Phaser.Input.Keyboard.JustDown(this.cursors.right!);
-      const upPressed = Phaser.Input.Keyboard.JustDown(this.cursors.up!);
-      const downPressed = Phaser.Input.Keyboard.JustDown(this.cursors.down!);
+      const leftPressed = this.inputAdapter.consume('navLeft');
+      const rightPressed = this.inputAdapter.consume('navRight');
+      const upPressed = this.inputAdapter.consume('navUp');
+      const downPressed = this.inputAdapter.consume('navDown');
 
       if (leftPressed || upPressed) {
         this.shiftNgPlusCarry(-1);
@@ -233,19 +229,19 @@ export class TitleScene extends Phaser.Scene {
         return;
       }
 
-      if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+      if (this.inputAdapter.consume('confirm')) {
         this.startNewGamePlus();
         return;
       }
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+    if (this.inputAdapter.consume('cancel') || this.inputAdapter.consume('menu')) {
       this.audio.playMenuBack();
       this.closePanel();
       return;
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.enterKey) && this.panelMode === 'quitConfirm') {
+    if (this.inputAdapter.consume('confirm') && this.panelMode === 'quitConfirm') {
       this.audio.playMenuConfirm();
       this.openPanel('quitDone');
     }
@@ -361,7 +357,8 @@ export class TitleScene extends Phaser.Scene {
         '',
         'OVERWORLD: M TOGGLE MINIMAP',
         'BATTLE: B OPEN BAG',
-        'NEW GAME+: TRAINERS RANDOMIZE BY RUN'
+        'NEW GAME+: TRAINERS RANDOMIZE BY RUN',
+        this.shouldShowMobileControls() ? 'MOBILE: TAP FULLSCREEN (TOP-RIGHT)' : ''
       ]);
     } else {
       this.panelHeading.setText(mode === 'continue' ? 'CONTINUE' : 'SYSTEM');
@@ -547,5 +544,46 @@ export class TitleScene extends Phaser.Scene {
     return `${hours.toString().padStart(2, '0')}:${minutes
       .toString()
       .padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  }
+
+  private shouldShowMobileControls(): boolean {
+    return isTouchDevice() || isSmallScreen();
+  }
+
+  private createMobileFullscreenButton(): void {
+    if (!this.shouldShowMobileControls()) {
+      return;
+    }
+
+    const safeInsets = getSafeAreaInsets();
+    const buttonWidth = 104;
+    const buttonHeight = 30;
+    const x = this.scale.width - buttonWidth - 12 - safeInsets.right;
+    const y = 12 + safeInsets.top;
+
+    const background = this.add
+      .rectangle(x, y, buttonWidth, buttonHeight, 0x0b1a31, 0.94)
+      .setOrigin(0)
+      .setStrokeStyle(2, 0x8cb6dc, 1)
+      .setInteractive({ useHandCursor: true });
+    const label = this.add
+      .text(x + buttonWidth / 2, y + buttonHeight / 2, 'Fullscreen', {
+        fontFamily: UI_THEME.fontFamily,
+        fontSize: '12px',
+        color: '#f6e492'
+      })
+      .setOrigin(0.5);
+
+    background.on('pointerdown', () => {
+      if (this.scale.isFullscreen) {
+        this.scale.stopFullscreen();
+        this.audio.playMenuBack();
+      } else {
+        this.scale.startFullscreen();
+        this.audio.playMenuConfirm();
+      }
+    });
+
+    this.add.container(0, 0, [background, label]).setDepth(3000);
   }
 }

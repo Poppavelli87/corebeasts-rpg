@@ -10,6 +10,7 @@ import {
 } from '../state/GameState';
 import { MAP_DEFINITIONS } from '../systems/TileMap';
 import { AudioSystem } from '../systems/AudioSystem';
+import { InputAdapter } from '../systems/InputAdapter';
 import { UI_THEME, createBackHint, createHeadingText, createPanel } from '../ui/UiTheme';
 
 type StarterOption = {
@@ -76,6 +77,8 @@ export class StarterSelectionScene extends Phaser.Scene {
   private actionTimestamps: Record<string, number> = {};
 
   private devLastKeyText: Phaser.GameObjects.Text | null = null;
+
+  private inputAdapter!: InputAdapter;
 
   public constructor() {
     super(SCENE_KEYS.STARTER_SELECTION);
@@ -177,6 +180,7 @@ export class StarterSelectionScene extends Phaser.Scene {
     });
 
     this.bindInputs();
+    this.inputAdapter = new InputAdapter(this, { keyboardEnabled: false });
 
     this.refreshSelection();
 
@@ -195,30 +199,48 @@ export class StarterSelectionScene extends Phaser.Scene {
   }
 
   public update(): void {
-    if (!this.keys) {
+    if (!this.keys && !this.inputAdapter) {
       return;
     }
 
-    if (
-      Phaser.Input.Keyboard.JustDown(this.keys.LEFT) ||
-      Phaser.Input.Keyboard.JustDown(this.keys.A)
-    ) {
-      this.moveSelection(-1, 'LEFT');
+    if (this.inputAdapter.consume('navLeft')) {
+      this.moveSelection(-1, 'TOUCH_LEFT');
     }
-    if (
-      Phaser.Input.Keyboard.JustDown(this.keys.RIGHT) ||
-      Phaser.Input.Keyboard.JustDown(this.keys.D)
-    ) {
-      this.moveSelection(1, 'RIGHT');
+
+    if (this.inputAdapter.consume('navRight')) {
+      this.moveSelection(1, 'TOUCH_RIGHT');
     }
-    if (
-      Phaser.Input.Keyboard.JustDown(this.keys.ENTER) ||
-      Phaser.Input.Keyboard.JustDown(this.keys.SPACE)
-    ) {
-      this.handleConfirmInput('ENTER');
+
+    if (this.inputAdapter.consume('confirm')) {
+      this.handleConfirmInput('TOUCH_A');
     }
-    if (Phaser.Input.Keyboard.JustDown(this.keys.ESC)) {
-      this.handleBackInput('ESC');
+
+    if (this.inputAdapter.consume('cancel') || this.inputAdapter.consume('menu')) {
+      this.handleBackInput('TOUCH_B');
+    }
+
+    if (this.keys) {
+      if (
+        Phaser.Input.Keyboard.JustDown(this.keys.LEFT) ||
+        Phaser.Input.Keyboard.JustDown(this.keys.A)
+      ) {
+        this.moveSelection(-1, 'LEFT');
+      }
+      if (
+        Phaser.Input.Keyboard.JustDown(this.keys.RIGHT) ||
+        Phaser.Input.Keyboard.JustDown(this.keys.D)
+      ) {
+        this.moveSelection(1, 'RIGHT');
+      }
+      if (
+        Phaser.Input.Keyboard.JustDown(this.keys.ENTER) ||
+        Phaser.Input.Keyboard.JustDown(this.keys.SPACE)
+      ) {
+        this.handleConfirmInput('ENTER');
+      }
+      if (Phaser.Input.Keyboard.JustDown(this.keys.ESC)) {
+        this.handleBackInput('ESC');
+      }
     }
   }
 

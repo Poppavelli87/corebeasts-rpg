@@ -11,7 +11,7 @@ export class BootScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor('#05050a');
     ProcSpriteFactory.prewarm(this);
 
-    if (!this.scene.isActive(SCENE_KEYS.DEBUG)) {
+    if (import.meta.env.DEV && !this.scene.isActive(SCENE_KEYS.DEBUG)) {
       this.scene.launch(SCENE_KEYS.DEBUG);
     }
 

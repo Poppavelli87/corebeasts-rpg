@@ -4,6 +4,7 @@ import { getCreatureDefinition } from '../data/creatures';
 import { getMoveDefinition } from '../data/moves';
 import { applyItemEvolution, xpToNextLevel } from '../systems/Progression';
 import { AudioSystem } from '../systems/AudioSystem';
+import { InputAdapter } from '../systems/InputAdapter';
 import {
   clearCreatureStatus,
   type DifficultyMode,
@@ -45,6 +46,7 @@ type ViewMode =
   | 'storageReleaseConfirm'
   | 'options'
   | 'optionsConfirm'
+  | 'mainMenuConfirm'
   | 'message';
 
 type PartySceneLaunchData = {
@@ -53,10 +55,10 @@ type PartySceneLaunchData = {
 
 type StorageTab = 'party' | 'storage';
 
-type RootOption = 'Party' | 'Inventory' | 'Save' | 'Options';
+type RootOption = 'Party' | 'Inventory' | 'Save' | 'Options' | 'Main Menu';
 type StorageActionOption = 'Move to Party' | 'Release' | 'Cancel';
 
-const ROOT_OPTIONS: RootOption[] = ['Party', 'Inventory', 'Save', 'Options'];
+const ROOT_OPTIONS: RootOption[] = ['Party', 'Inventory', 'Save', 'Options', 'Main Menu'];
 const DIFFICULTY_OPTIONS: DifficultyMode[] = ['easy', 'normal', 'hard'];
 const TEXT_SPEED_OPTIONS: TextSpeed[] = ['slow', 'normal', 'fast'];
 const STORAGE_ACTION_OPTIONS: StorageActionOption[] = ['Move to Party', 'Release', 'Cancel'];
@@ -116,6 +118,8 @@ export class PartyScene extends Phaser.Scene {
 
   private optionsConfirmIndex = 1;
 
+  private mainMenuConfirmIndex = 1;
+
   private messageText = '';
 
   private messageReturnMode: Exclude<ViewMode, 'message'> = 'root';
@@ -124,11 +128,7 @@ export class PartyScene extends Phaser.Scene {
 
   private layer!: Phaser.GameObjects.Container;
 
-  private cursorKeys!: Phaser.Types.Input.Keyboard.CursorKeys;
-
-  private enterKey!: Phaser.Input.Keyboard.Key;
-
-  private escKey!: Phaser.Input.Keyboard.Key;
+  private inputAdapter!: InputAdapter;
 
   private storageSelectionByTab: Record<StorageTab, number> = {
     party: 0,
@@ -160,21 +160,21 @@ export class PartyScene extends Phaser.Scene {
 
     this.layer = this.add.container(0, 0).setDepth(20_000);
 
-    this.cursorKeys = this.input.keyboard!.createCursorKeys();
-    this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
-    this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.inputAdapter = new InputAdapter(this);
 
     this.renderView();
   }
 
   public update(): void {
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+    const cancelPressed = this.inputAdapter.consume('cancel') || this.inputAdapter.consume('menu');
+
+    if (cancelPressed) {
       this.handleBack();
       return;
     }
 
     if (this.mode === 'message') {
-      if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+      if (this.inputAdapter.consume('confirm')) {
         this.audio.playMenuConfirm();
         this.mode = this.messageReturnMode;
         this.renderView();
@@ -183,24 +183,24 @@ export class PartyScene extends Phaser.Scene {
     }
 
     if (this.mode === 'storageManager') {
-      const leftPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.left!);
-      const rightPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.right!);
+      const leftPressed = this.inputAdapter.consume('navLeft');
+      const rightPressed = this.inputAdapter.consume('navRight');
       if (leftPressed || rightPressed) {
         this.switchStorageTab(leftPressed ? -1 : 1);
       }
     }
 
     if (this.mode === 'options') {
-      const leftPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.left!);
-      const rightPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.right!);
+      const leftPressed = this.inputAdapter.consume('navLeft');
+      const rightPressed = this.inputAdapter.consume('navRight');
       if (leftPressed || rightPressed) {
         this.handleOptionsHorizontalAdjust(leftPressed ? -1 : 1);
       }
     }
 
     if (this.mode === 'storageReleaseConfirm') {
-      const leftPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.left!);
-      const rightPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.right!);
+      const leftPressed = this.inputAdapter.consume('navLeft');
+      const rightPressed = this.inputAdapter.consume('navRight');
       if (leftPressed || rightPressed) {
         this.storageReleaseConfirmIndex = Phaser.Math.Wrap(
           this.storageReleaseConfirmIndex + (leftPressed ? -1 : 1),
@@ -213,8 +213,8 @@ export class PartyScene extends Phaser.Scene {
     }
 
     if (this.mode === 'optionsConfirm') {
-      const leftPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.left!);
-      const rightPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.right!);
+      const leftPressed = this.inputAdapter.consume('navLeft');
+      const rightPressed = this.inputAdapter.consume('navRight');
       if (leftPressed || rightPressed) {
         this.optionsConfirmIndex = Phaser.Math.Wrap(
           this.optionsConfirmIndex + (leftPressed ? -1 : 1),
@@ -226,15 +226,29 @@ export class PartyScene extends Phaser.Scene {
       }
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.cursorKeys.up!)) {
+    if (this.mode === 'mainMenuConfirm') {
+      const leftPressed = this.inputAdapter.consume('navLeft');
+      const rightPressed = this.inputAdapter.consume('navRight');
+      if (leftPressed || rightPressed) {
+        this.mainMenuConfirmIndex = Phaser.Math.Wrap(
+          this.mainMenuConfirmIndex + (leftPressed ? -1 : 1),
+          0,
+          2
+        );
+        this.audio.playMenuMove();
+        this.renderView();
+      }
+    }
+
+    if (this.inputAdapter.consume('navUp')) {
       this.moveSelection(-1);
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.cursorKeys.down!)) {
+    if (this.inputAdapter.consume('navDown')) {
       this.moveSelection(1);
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (this.inputAdapter.consume('confirm')) {
       this.confirmSelection();
     }
   }
@@ -297,6 +311,9 @@ export class PartyScene extends Phaser.Scene {
     } else if (this.mode === 'optionsConfirm') {
       this.optionsConfirmIndex = Phaser.Math.Wrap(this.optionsConfirmIndex + direction, 0, 2);
       didMove = true;
+    } else if (this.mode === 'mainMenuConfirm') {
+      this.mainMenuConfirmIndex = Phaser.Math.Wrap(this.mainMenuConfirmIndex + direction, 0, 2);
+      didMove = true;
     }
 
     if (didMove) {
@@ -336,6 +353,11 @@ export class PartyScene extends Phaser.Scene {
 
     if (this.mode === 'optionsConfirm') {
       this.confirmModeChange();
+      return;
+    }
+
+    if (this.mode === 'mainMenuConfirm') {
+      this.confirmMainMenuSelection();
       return;
     }
 
@@ -483,6 +505,13 @@ export class PartyScene extends Phaser.Scene {
       return;
     }
 
+    if (option === 'Main Menu') {
+      this.mainMenuConfirmIndex = 1;
+      this.mode = 'mainMenuConfirm';
+      this.renderView();
+      return;
+    }
+
     this.userSettings = getUserSettings();
     this.pendingDifficulty = this.gameState.difficulty;
     this.pendingChallengeMode = this.gameState.challengeMode;
@@ -603,6 +632,12 @@ export class PartyScene extends Phaser.Scene {
       return;
     }
 
+    if (this.mode === 'mainMenuConfirm') {
+      this.mode = 'root';
+      this.renderView();
+      return;
+    }
+
     if (this.mode === 'options') {
       this.mode = 'root';
       this.renderView();
@@ -693,6 +728,8 @@ export class PartyScene extends Phaser.Scene {
       this.renderOptionsMenu(panel);
     } else if (this.mode === 'optionsConfirm') {
       this.renderOptionsConfirm(panel);
+    } else if (this.mode === 'mainMenuConfirm') {
+      this.renderMainMenuConfirm(panel);
     } else if (this.mode === 'storageManager') {
       this.renderStorageManager(panel);
     } else if (this.mode === 'storageAction') {
@@ -1041,6 +1078,71 @@ export class PartyScene extends Phaser.Scene {
     });
   }
 
+  private renderMainMenuConfirm(panel: Phaser.GameObjects.Rectangle): void {
+    this.renderHeader(
+      panel,
+      'Return to Main Menu?',
+      'Unsaved progress may be lost. Your game will be saved first.'
+    );
+
+    const warning = this.add
+      .text(panel.x + 16, panel.y + 96, 'Return to Main Menu now?', {
+        fontFamily: '"Courier New", monospace',
+        fontSize: '16px',
+        color: '#f5fbff'
+      })
+      .setScrollFactor(0);
+
+    const options = ['Confirm', 'Cancel'];
+    options.forEach((option, index) => {
+      const selected = this.mainMenuConfirmIndex === index;
+      const buttonWidth = 164;
+      const button = this.add
+        .rectangle(
+          panel.x + 18 + index * (buttonWidth + 14),
+          panel.y + 138,
+          buttonWidth,
+          40,
+          0x16253d,
+          1
+        )
+        .setOrigin(0)
+        .setStrokeStyle(2, selected ? 0xbce0ff : 0x4f7398, 1)
+        .setScrollFactor(0)
+        .setInteractive({ useHandCursor: true });
+
+      button.on('pointerover', () => {
+        this.mainMenuConfirmIndex = index;
+        this.renderView();
+      });
+
+      button.on('pointerdown', () => {
+        this.mainMenuConfirmIndex = index;
+        this.confirmMainMenuSelection();
+      });
+
+      const text = this.add
+        .text(button.x + 18, button.y + 11, `${selected ? '>' : ' '} ${option}`, {
+          fontFamily: '"Courier New", monospace',
+          fontSize: '16px',
+          color: selected ? '#f6e492' : '#d5e6f8'
+        })
+        .setScrollFactor(0);
+
+      this.layer.add([button, text]);
+    });
+
+    const help = this.add
+      .text(panel.x + 16, panel.y + panel.height - 34, 'Enter: Confirm  Esc: Back', {
+        fontFamily: '"Courier New", monospace',
+        fontSize: '12px',
+        color: '#8fb6d7'
+      })
+      .setScrollFactor(0);
+
+    this.layer.add([warning, help]);
+  }
+
   private confirmOptionsSelection(): void {
     if (this.optionsIndex === 0) {
       this.shiftPendingDifficulty(1);
@@ -1119,6 +1221,34 @@ export class PartyScene extends Phaser.Scene {
       'options',
       'Options'
     );
+  }
+
+  private confirmMainMenuSelection(): void {
+    if (this.mainMenuConfirmIndex === 1) {
+      this.audio.playMenuBack();
+      this.mode = 'root';
+      this.renderView();
+      return;
+    }
+
+    SaveSystem.save(this.gameState);
+    this.input.enabled = false;
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      const manager = this.game.scene;
+      this.registry.set('battleState', null);
+      this.registry.set('overworldState', null);
+      this.registry.set('gameState', null);
+
+      manager.stop(SCENE_KEYS.OVERWORLD);
+      manager.stop(SCENE_KEYS.BATTLE);
+      manager.stop(SCENE_KEYS.PARTY);
+      manager.stop(SCENE_KEYS.INTRO);
+      manager.stop(SCENE_KEYS.STARTER_SELECTION);
+      manager.stop(SCENE_KEYS.CREDITS);
+      manager.stop(SCENE_KEYS.TITLE);
+      manager.start(SCENE_KEYS.TITLE);
+    });
+    this.cameras.main.fadeOut(220, 0, 0, 0);
   }
 
   private shiftPendingDifficulty(direction: number): void {
@@ -1612,6 +1742,12 @@ export class PartyScene extends Phaser.Scene {
       'Enter: Confirm',
       'B: Open Bag',
       'Esc: Back',
+      '',
+      'Mobile Touch Controls:',
+      'D-pad: Move / navigate',
+      'A: Confirm',
+      'B: Back / cancel',
+      'MENU: Open or close pause menu',
       '',
       'Challenge Mode:',
       'No items in trainer battles'

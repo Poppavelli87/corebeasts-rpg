@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { SCENE_KEYS } from '../constants';
 import { getActiveGameState, markStoryFlag } from '../state/GameState';
 import { AudioSystem } from '../systems/AudioSystem';
+import { InputAdapter } from '../systems/InputAdapter';
 import { SaveSystem } from '../systems/SaveSystem';
 import { UI_THEME, createBackHint, createHeadingText, createPanel } from '../ui/UiTheme';
 
@@ -29,9 +30,7 @@ const formatTime = (totalSeconds: number): string => {
 export class CreditsScene extends Phaser.Scene {
   private audio!: AudioSystem;
 
-  private enterKey!: Phaser.Input.Keyboard.Key;
-
-  private escKey!: Phaser.Input.Keyboard.Key;
+  private inputAdapter!: InputAdapter;
 
   public constructor() {
     super(SCENE_KEYS.CREDITS);
@@ -163,14 +162,14 @@ export class CreditsScene extends Phaser.Scene {
       .setOrigin(0.5);
     createBackHint(this, 'Esc: Back to Title');
 
-    this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
-    this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.inputAdapter = new InputAdapter(this);
   }
 
   public update(): void {
     if (
-      Phaser.Input.Keyboard.JustDown(this.enterKey) ||
-      Phaser.Input.Keyboard.JustDown(this.escKey)
+      this.inputAdapter.consume('confirm') ||
+      this.inputAdapter.consume('cancel') ||
+      this.inputAdapter.consume('menu')
     ) {
       this.audio.playMenuConfirm();
       this.scene.start(SCENE_KEYS.TITLE);

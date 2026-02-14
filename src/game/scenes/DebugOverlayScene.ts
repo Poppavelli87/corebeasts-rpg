@@ -13,6 +13,11 @@ export class DebugOverlayScene extends Phaser.Scene {
   }
 
   public create(): void {
+    if (!import.meta.env.DEV) {
+      this.scene.stop();
+      return;
+    }
+
     this.toggleKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.BACKTICK);
     this.label = this.add
       .text(8, 8, '', {

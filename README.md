@@ -45,6 +45,15 @@ Battle:
 - `B`: Open Bag quickly
 - `Shift` (hold): Fast-forward battle text
 
+Mobile / Touch:
+
+- On small/touch devices, on-screen controls appear automatically.
+- Left side D-pad: movement and menu navigation.
+- Right side `A`: confirm/interact.
+- Right side `B`: back/cancel.
+- Right side `MENU`: open/close pause menu.
+- Title screen includes a mobile `Fullscreen` button (top-right).
+
 ## Build + Distribution
 
 ### Web Build (shareable zip)

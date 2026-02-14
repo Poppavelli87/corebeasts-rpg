@@ -11,6 +11,21 @@ import { PartyScene } from './game/scenes/PartyScene';
 import { StarterSelectionScene } from './game/scenes/StarterSelectionScene';
 import { TitleScene } from './game/scenes/TitleScene';
 
+const sceneList: Phaser.Types.Scenes.SceneType[] = [
+  BootScene,
+  TitleScene,
+  IntroScene,
+  StarterSelectionScene,
+  OverworldScene,
+  BattleScene,
+  PartyScene,
+  CreditsScene
+];
+
+if (import.meta.env.DEV) {
+  sceneList.push(DebugOverlayScene);
+}
+
 const app = document.querySelector<HTMLDivElement>('#app');
 
 if (!app) {
@@ -32,20 +47,35 @@ const game = new Phaser.Game({
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH
   },
-  scene: [
-    BootScene,
-    TitleScene,
-    IntroScene,
-    StarterSelectionScene,
-    OverworldScene,
-    BattleScene,
-    PartyScene,
-    CreditsScene,
-    DebugOverlayScene
-  ]
+  scene: sceneList
 });
 
 window.__PHASER_GAME__ = game;
+
+const canvas = game.canvas;
+if (canvas) {
+  canvas.style.touchAction = 'none';
+  canvas.style.userSelect = 'none';
+  canvas.style.webkitUserSelect = 'none';
+
+  const preventCanvasTouchScroll = (event: TouchEvent): void => {
+    if (event.cancelable) {
+      event.preventDefault();
+    }
+  };
+
+  canvas.addEventListener('touchmove', preventCanvasTouchScroll, { passive: false });
+  canvas.addEventListener('touchstart', preventCanvasTouchScroll, { passive: false });
+  canvas.addEventListener('gesturestart', preventCanvasTouchScroll as EventListener, {
+    passive: false
+  });
+
+  game.events.once(Phaser.Core.Events.DESTROY, () => {
+    canvas.removeEventListener('touchmove', preventCanvasTouchScroll);
+    canvas.removeEventListener('touchstart', preventCanvasTouchScroll);
+    canvas.removeEventListener('gesturestart', preventCanvasTouchScroll as EventListener);
+  });
+}
 
 type StepCapableGame = Phaser.Game & {
   step: (time: number, delta: number) => void;

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { getSafeAreaInsets } from '../systems/Device';
 
 export const UI_THEME = {
   fontFamily: '"Courier New", monospace',
@@ -192,8 +193,9 @@ export const createBackHint = (
     container?: Phaser.GameObjects.Container;
   } = {}
 ): Phaser.GameObjects.Text => {
-  const x = config.x ?? scene.scale.width - 12;
-  const y = config.y ?? scene.scale.height - 12;
+  const safeInsets = getSafeAreaInsets();
+  const x = config.x ?? scene.scale.width - 12 - safeInsets.right;
+  const y = config.y ?? scene.scale.height - 12 - safeInsets.bottom;
 
   const hint = scene.add
     .text(x, y, text, {

@@ -10,6 +10,8 @@ import { getMoveDefinition, type MoveDefinition, type MoveId } from '../data/mov
 import { SCENE_KEYS } from '../constants';
 import { AudioSystem } from '../systems/AudioSystem';
 import { BattleEngine, type BattleAction } from '../systems/BattleEngine';
+import { isSmallScreen } from '../systems/Device';
+import { InputAdapter } from '../systems/InputAdapter';
 import {
   applyExperienceGain,
   calculateBattleXpReward,
@@ -193,12 +195,9 @@ export class BattleScene extends Phaser.Scene {
   private pendingXpByPartyIndex = new Map<number, number>();
   private abilityEventTags = new Set<string>();
   private enemyHardSwitchUsed = false;
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasd!: Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
-  private enterKey!: Phaser.Input.Keyboard.Key;
-  private escKey!: Phaser.Input.Keyboard.Key;
   private bagKey!: Phaser.Input.Keyboard.Key;
   private shiftKey!: Phaser.Input.Keyboard.Key;
+  private inputAdapter!: InputAdapter;
 
   public constructor() {
     super(SCENE_KEYS.BATTLE);
@@ -233,19 +232,14 @@ export class BattleScene extends Phaser.Scene {
 
     this.rebuildEngineFromActive();
     this.drawBackground();
+    this.inputAdapter = new InputAdapter(this);
+    if (this.inputAdapter.usesTouchControls() && isSmallScreen()) {
+      this.battlePanelTop = 208;
+    }
     this.createCombatSprites();
     this.createCombatPanels();
     this.createBattlePanel();
 
-    this.cursors = this.input.keyboard!.createCursorKeys();
-    this.wasd = {
-      w: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
-      a: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.A),
-      s: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.S),
-      d: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D)
-    };
-    this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
-    this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     this.bagKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.B);
     this.shiftKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
 
@@ -266,7 +260,7 @@ export class BattleScene extends Phaser.Scene {
 
   public update(): void {
     if (this.activeMessageResolver) {
-      if (Phaser.Input.Keyboard.JustDown(this.enterKey) || this.shiftKey.isDown) {
+      if (this.inputAdapter.consume('confirm') || this.shiftKey.isDown) {
         this.resolveActiveMessage();
       }
       return;
@@ -527,25 +521,13 @@ export class BattleScene extends Phaser.Scene {
     }
 
     let movedSelection = false;
-    if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.left!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.a)
-    ) {
+    if (this.inputAdapter.consume('navLeft')) {
       movedSelection = this.moveCommandSelection('left');
-    } else if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.right!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.d)
-    ) {
+    } else if (this.inputAdapter.consume('navRight')) {
       movedSelection = this.moveCommandSelection('right');
-    } else if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.w)
-    ) {
+    } else if (this.inputAdapter.consume('navUp')) {
       movedSelection = this.moveCommandSelection('up');
-    } else if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.down!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.s)
-    ) {
+    } else if (this.inputAdapter.consume('navDown')) {
       movedSelection = this.moveCommandSelection('down');
     }
 
@@ -555,7 +537,7 @@ export class BattleScene extends Phaser.Scene {
       this.publishBattleState();
     }
 
-    if (!Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (!this.inputAdapter.consume('confirm')) {
       return;
     }
 
@@ -589,7 +571,7 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+    if (this.inputAdapter.consume('cancel') || this.inputAdapter.consume('menu')) {
       this.closeMoveSelection();
       this.setCommandPrompt();
       this.refreshCommandHighlights();
@@ -598,25 +580,13 @@ export class BattleScene extends Phaser.Scene {
     }
 
     let movedSelection = false;
-    if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.left!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.a)
-    ) {
+    if (this.inputAdapter.consume('navLeft')) {
       movedSelection = this.moveMoveSelection('left');
-    } else if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.right!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.d)
-    ) {
+    } else if (this.inputAdapter.consume('navRight')) {
       movedSelection = this.moveMoveSelection('right');
-    } else if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.w)
-    ) {
+    } else if (this.inputAdapter.consume('navUp')) {
       movedSelection = this.moveMoveSelection('up');
-    } else if (
-      Phaser.Input.Keyboard.JustDown(this.cursors.down!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.s)
-    ) {
+    } else if (this.inputAdapter.consume('navDown')) {
       movedSelection = this.moveMoveSelection('down');
     }
 
@@ -626,7 +596,7 @@ export class BattleScene extends Phaser.Scene {
       this.publishBattleState();
     }
 
-    if (!Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (!this.inputAdapter.consume('confirm')) {
       return;
     }
 
@@ -1125,12 +1095,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private updateBagInput(): void {
-    const moveUp =
-      Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.w);
-    const moveDown =
-      Phaser.Input.Keyboard.JustDown(this.cursors.down!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.s);
+    const moveUp = this.inputAdapter.consume('navUp');
+    const moveDown = this.inputAdapter.consume('navDown');
 
     if (moveUp || moveDown) {
       const direction = moveUp ? -1 : 1;
@@ -1143,14 +1109,15 @@ export class BattleScene extends Phaser.Scene {
     }
 
     if (
-      Phaser.Input.Keyboard.JustDown(this.escKey) ||
+      this.inputAdapter.consume('cancel') ||
+      this.inputAdapter.consume('menu') ||
       Phaser.Input.Keyboard.JustDown(this.bagKey)
     ) {
       this.closeBag();
       return;
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (this.inputAdapter.consume('confirm')) {
       const selected = this.bagItemButtons[this.selectedBagIndex];
       if (!selected) {
         return;
@@ -1495,12 +1462,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private updateSwitchInput(): void {
-    const moveUp =
-      Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.w);
-    const moveDown =
-      Phaser.Input.Keyboard.JustDown(this.cursors.down!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.s);
+    const moveUp = this.inputAdapter.consume('navUp');
+    const moveDown = this.inputAdapter.consume('navDown');
 
     const selectableRows = [...new Set(this.switchButtons.map((button) => button.index))]
       .filter((index) => index >= 0)
@@ -1519,12 +1482,15 @@ export class BattleScene extends Phaser.Scene {
       this.publishBattleState();
     }
 
-    if (!this.switchForced && Phaser.Input.Keyboard.JustDown(this.escKey)) {
+    if (
+      !this.switchForced &&
+      (this.inputAdapter.consume('cancel') || this.inputAdapter.consume('menu'))
+    ) {
       this.resolveSwitchSelection(null);
       return;
     }
 
-    if (!Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (!this.inputAdapter.consume('confirm')) {
       return;
     }
 
@@ -2365,12 +2331,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private updateMoveReplaceInput(): void {
-    const moveUp =
-      Phaser.Input.Keyboard.JustDown(this.cursors.up!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.w);
-    const moveDown =
-      Phaser.Input.Keyboard.JustDown(this.cursors.down!) ||
-      Phaser.Input.Keyboard.JustDown(this.wasd.s);
+    const moveUp = this.inputAdapter.consume('navUp');
+    const moveDown = this.inputAdapter.consume('navDown');
 
     if (moveUp || moveDown) {
       const direction = moveUp ? -1 : 1;
@@ -2382,12 +2344,12 @@ export class BattleScene extends Phaser.Scene {
       this.publishBattleState();
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+    if (this.inputAdapter.consume('cancel') || this.inputAdapter.consume('menu')) {
       this.resolveMoveReplaceSelection(null);
       return;
     }
 
-    if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+    if (this.inputAdapter.consume('confirm')) {
       const selected = this.replaceMoveButtons[this.selectedReplaceIndex];
       if (!selected) {
         return;

@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import {
   MAP_DEFINITIONS,
   TILE_SIZE,
+  type BossConfig,
   type BlockedGateDefinition,
   type DialogEntry,
   type Direction,
@@ -17,6 +18,7 @@ import {
 export {
   MAP_DEFINITIONS,
   TILE_SIZE,
+  type BossConfig,
   type BlockedGateDefinition,
   type DialogEntry,
   type Direction,

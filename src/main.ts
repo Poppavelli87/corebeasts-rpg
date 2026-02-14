@@ -10,7 +10,7 @@ import { OverworldScene } from './game/scenes/OverworldScene';
 import { PartyScene } from './game/scenes/PartyScene';
 import { StarterSelectionScene } from './game/scenes/StarterSelectionScene';
 import { TitleScene } from './game/scenes/TitleScene';
-import { getLayoutManager } from './game/ui/LayoutManager';
+import { getViewportManager } from './game/ui/ViewportManager';
 
 const sceneList: Phaser.Types.Scenes.SceneType[] = [
   BootScene,
@@ -34,13 +34,13 @@ if (!app) {
 }
 
 app.innerHTML = '<div id="game-root"></div>';
-const initialLayout = getLayoutManager().getLayoutProfile();
+const initialViewport = getViewportManager().getViewport();
 
 const game = new Phaser.Game({
   type: Phaser.CANVAS,
   parent: 'game-root',
-  width: initialLayout.width || GAME_WIDTH,
-  height: initialLayout.height || GAME_HEIGHT,
+  width: initialViewport.screenWidth || GAME_WIDTH,
+  height: initialViewport.screenHeight || GAME_HEIGHT,
   backgroundColor: '#05050a',
   pixelArt: true,
   antialias: false,
@@ -56,15 +56,13 @@ const game = new Phaser.Game({
 window.__PHASER_GAME__ = game;
 
 const applyViewportResize = (): void => {
-  if (typeof window === 'undefined') {
-    return;
-  }
-
-  game.scale.resize(window.innerWidth, window.innerHeight);
+  const viewport = getViewportManager().getViewport();
+  game.scale.resize(viewport.screenWidth, viewport.screenHeight);
 };
 
-window.addEventListener('resize', applyViewportResize, { passive: true });
-window.addEventListener('orientationchange', applyViewportResize, { passive: true });
+const unsubscribeViewport = getViewportManager().onResize(() => {
+  applyViewportResize();
+});
 applyViewportResize();
 
 const canvas = game.canvas;
@@ -86,8 +84,7 @@ if (canvas) {
   });
 
   game.events.once(Phaser.Core.Events.DESTROY, () => {
-    window.removeEventListener('resize', applyViewportResize);
-    window.removeEventListener('orientationchange', applyViewportResize);
+    unsubscribeViewport();
     canvas.removeEventListener('touchmove', preventCanvasTouchScroll);
     canvas.removeEventListener('touchstart', preventCanvasTouchScroll);
     canvas.removeEventListener('gesturestart', preventCanvasTouchScroll as EventListener);

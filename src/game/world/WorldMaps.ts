@@ -55,6 +55,21 @@ export type TrainerNpcMeta = {
   preBattleLine: string;
   postBattleLines: string[];
   repeatLine?: string;
+  bossConfig?: BossConfig;
+};
+
+export type BossPhaseTriggerCondition = 'hpBelowPercent' | 'turnNumber';
+
+export type BossPhaseTrigger = {
+  condition: BossPhaseTriggerCondition;
+  value: number;
+  actionId: string;
+};
+
+export type BossConfig = {
+  onBattleStartActionId?: string;
+  phaseTriggers?: BossPhaseTrigger[];
+  specialBehaviorId?: string;
 };
 
 export type NpcDefinition = {
@@ -174,6 +189,7 @@ type TrialMasterSpec = {
   postBattleLines: string[];
   repeatLine: string;
   color?: number;
+  bossConfig?: BossConfig;
 };
 
 const createFilledTiles = (width: number, height: number, tile: TileType): TileType[][] =>
@@ -406,7 +422,8 @@ const createTrialMasterNpc = (spec: TrialMasterSpec): NpcDefinition => ({
     defeatFlag: spec.trialFlag,
     preBattleLine: spec.preBattleLine,
     postBattleLines: spec.postBattleLines,
-    repeatLine: spec.repeatLine
+    repeatLine: spec.repeatLine,
+    bossConfig: spec.bossConfig
   }
 });
 
@@ -1403,7 +1420,10 @@ const REGION_TWO_MAPS = {
         trialFlag: 'trial3Complete',
         preBattleLine: 'Weight your choices. Every hit should mean something.',
         postBattleLines: ['Trial 3 complete. Accept the Stone Sigil.'],
-        repeatLine: 'Your Stone Sigil already proves this trial.'
+        repeatLine: 'Your Stone Sigil already proves this trial.',
+        bossConfig: {
+          onBattleStartActionId: 'stone_master_start'
+        }
       })
     ],
     exits: [
@@ -1809,7 +1829,10 @@ const REGION_THREE_MAPS = {
         trialFlag: 'trial5Complete',
         preBattleLine: 'Endure the pressure and stay sharp.',
         postBattleLines: ['Trial 5 complete. Receive the Hollow Sigil.'],
-        repeatLine: 'You already earned this sigil.'
+        repeatLine: 'You already earned this sigil.',
+        bossConfig: {
+          onBattleStartActionId: 'shade_archivist_start'
+        }
       })
     ],
     exits: [
@@ -2195,7 +2218,10 @@ const REGION_THREE_MAPS = {
         trialFlag: 'trial7Complete',
         preBattleLine: 'Balance speed and precision. One mistake ends the climb.',
         postBattleLines: ['Trial 7 complete. You gained the Sky Sigil.'],
-        repeatLine: 'You already climbed past this trial.'
+        repeatLine: 'You already climbed past this trial.',
+        bossConfig: {
+          specialBehaviorId: 'volt_twins_shift'
+        }
       })
     ],
     exits: [
@@ -2358,7 +2384,16 @@ const REGION_THREE_MAPS = {
         preBattleLine: 'Eight trials end here. Show me your full command.',
         postBattleLines: ['You have conquered the Final Tower.'],
         repeatLine: 'Your victory already echoes through the tower.',
-        color: 0xf4e6aa
+        color: 0xf4e6aa,
+        bossConfig: {
+          phaseTriggers: [
+            {
+              condition: 'hpBelowPercent',
+              value: 40,
+              actionId: 'final_aether_surge'
+            }
+          ]
+        }
       }),
       {
         id: 'postgame-boss-tower',

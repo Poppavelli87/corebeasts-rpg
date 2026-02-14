@@ -587,3 +587,48 @@ Original prompt: Create a new folder "corebeasts-rpg" and build a working Phaser
     - `output/layout-verify/battle-tablet-landscape.png`
     - Confirmed battle UI no longer overlaps touch controls in landscape/tablet and remains readable in portrait.
   - `npm run build` passes.
+- Unified mobile layout fix follow-up completed:
+  - Replaced side/portrait touch-control placement + footprint heuristics in `src/game/ui/TouchControls.ts`.
+    - Portrait controls now anchor lower and reserve bottom safe space reliably.
+    - Landscape controls now prefer side gutters and reduced bottom intrusion to avoid battle panel push-off.
+    - Footprint calculation now uses lower-band overlap + capped side margins.
+  - Overworld camera now uses viewport rect anchoring (`setViewport`) in `src/game/scenes/OverworldScene.ts` to prevent drift/misalignment when orientation/size changes.
+  - Added IntroScene resize safety guards in `src/game/scenes/IntroScene.ts` to avoid stale-object resize crashes during rapid scene switching.
+- Validation rerun:
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Skill loop run via `web_game_playwright_client.js` (`output/mobile-layout-fix-loop/`) completed.
+  - Additional Playwright viewport checks (portrait/landscape/tablet) captured in `output/mobile-layout-verify/` with no page/console errors in summaries (`summary.json`, `forced-summary.json`, `intro-rotate-summary.json`, `battle-rotate-summary.json`).
+  - Visual checks confirm:
+    - portrait intro dialog no longer covered by controls,
+    - portrait battle command/message panels stay above touch controls,
+    - landscape battle layout remains aligned and no longer drifts/pushes off-screen on rotate.
+- Benchmark: Boss Identity Upgrade (mechanics + dynamic music) implemented.
+  - Added trainer-level boss metadata in `src/game/world/WorldMaps.ts`:
+    - `bossConfig` support on trainer NPC metadata.
+    - Trial 3 (`trial_master_stone`) start action: `stone_master_start`.
+    - Trial 5 (`trial_master_hollow`) start action: `shade_archivist_start`.
+    - Trial 7 (`trial_master_skydrift`) special behavior: `volt_twins_shift`.
+    - Final boss (`trial_master_final`) phase trigger: `hpBelowPercent` 40 -> `final_aether_surge`.
+  - Added new behavior module `src/game/data/bossBehaviors.ts` with exported `BossContext` and `BOSS_BEHAVIORS` map.
+    - Stone start: enables one-time stone ward reduction setup.
+    - Shade start: applies gloom-equivalent status to both sides + sets damage modifier 1.1.
+    - Volt special: every 2 turns requests enemy force-switch (guarded by last switch turn).
+    - Final surge: at phase trigger sets +0.1 damage modifier, queues force-switch to final slot, queues final-phase music.
+  - Overworld integration (`src/game/scenes/OverworldScene.ts`): trainer launch payload now passes `trainerId` + `bossConfig` to `BattleScene`.
+  - Battle integration (`src/game/scenes/BattleScene.ts`):
+    - Added boss runtime state, phase trigger evaluation, per-turn special behavior execution, and queued forced enemy switching.
+    - Added stone ward slot flags and consumed-on-hit behavior with message: `<Name>'s Stone Ward absorbed the blow!`.
+    - Added boss damage modifier pipeline through engine callback.
+    - Added boss start behavior execution after intro and per-turn phase/special processing.
+    - Added boss victory music transition handling.
+  - Battle engine update (`src/game/systems/BattleEngine.ts`): added optional `damageAdjuster` callback so boss damage mods apply before HP/faint resolution.
+  - Audio update (`src/game/systems/AudioSystem.ts`):
+    - Added `playTrack(trackId)`, `fadeOut(duration)`, `fadeIn(duration)`, `crossfadeTo(trackId, duration)`.
+    - Added tracks: `battle_normal`, `battle_boss`, `battle_final_phase`, `victory_boss`.
+    - Kept backward compatibility for `playMusic('battle')` via track normalization.
+- Validation:
+  - `npm run format:fix` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Skill smoke run executed with `web_game_playwright_client.js` (`output/boss-benchmark-smoke/shot-0.png`, `shot-1.png`, `state-0.json`, `state-1.json`) and no emitted `errors-*.json` artifacts.

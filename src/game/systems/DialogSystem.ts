@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { DialogEntry } from './TileMap';
 import { getDialogCharsPerSecond, getUserSettings } from './UserSettings';
 import { UI_THEME } from '../ui/UiTheme';
+import { getViewportManager } from '../ui/ViewportManager';
 
 export class DialogSystem {
   private readonly scene: Phaser.Scene;
@@ -151,11 +152,13 @@ export class DialogSystem {
   }
 
   private layout(): void {
+    const viewport = getViewportManager().getViewport();
+    const safeMargins = getViewportManager().getSafeMargins();
     const margin = 10;
-    const width = this.scene.scale.width - margin * 2;
-    const height = 96;
-    const x = margin;
-    const y = this.scene.scale.height - height - margin;
+    const width = Math.max(220, viewport.width - safeMargins.left - safeMargins.right - margin * 2);
+    const height = Math.max(92, Math.min(122, Math.round(viewport.height * 0.3)));
+    const x = viewport.x + safeMargins.left + margin;
+    const y = viewport.y + viewport.height - safeMargins.bottom - height - Math.max(6, margin - 2);
 
     this.background.setPosition(x, y).setSize(width, height);
     this.border.setPosition(x, y).setSize(width, height);

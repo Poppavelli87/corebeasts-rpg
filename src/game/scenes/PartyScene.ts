@@ -26,7 +26,7 @@ import {
   type UserSettings
 } from '../systems/UserSettings';
 import { ProcSpriteFactory } from '../systems/ProcSpriteFactory';
-import { getLayoutManager, type LayoutProfile } from '../ui/LayoutManager';
+import { TouchControls } from '../ui/TouchControls';
 import {
   UI_THEME,
   createBackHint,
@@ -35,6 +35,7 @@ import {
   createPanel,
   createTinyIcon
 } from '../ui/UiTheme';
+import { getViewportManager, type ViewportRect } from '../ui/ViewportManager';
 
 type ViewMode =
   | 'root'
@@ -136,7 +137,7 @@ export class PartyScene extends Phaser.Scene {
     storage: 0
   };
 
-  private layoutProfile: LayoutProfile = getLayoutManager().getLayoutProfile();
+  private viewport: ViewportRect = getViewportManager().getViewport();
 
   private panelFrame = { x: 24, y: 20, width: 592, height: 320 };
 
@@ -166,12 +167,13 @@ export class PartyScene extends Phaser.Scene {
     this.storageActionIndex = 0;
     this.storageActionTargetIndex = 0;
     this.storageReleaseConfirmIndex = 0;
+    TouchControls.getShared().setDialogOpen(false);
 
     this.layer = this.add.container(0, 0).setDepth(20_000);
 
     this.inputAdapter = new InputAdapter(this);
-    this.layoutUnsubscribe = getLayoutManager().onResize((profile) => {
-      this.applyLayoutProfile(profile);
+    this.layoutUnsubscribe = getViewportManager().onResize((viewport) => {
+      this.applyLayoutProfile(viewport);
     });
     this.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
 
@@ -1790,9 +1792,9 @@ export class PartyScene extends Phaser.Scene {
     return creature.nickname ?? fallback;
   }
 
-  private applyLayoutProfile(profile: LayoutProfile): void {
-    this.layoutProfile = profile;
-    this.fontScale = Phaser.Math.Clamp(profile.fontScale, 0.9, 1.22);
+  private applyLayoutProfile(viewport: ViewportRect): void {
+    this.viewport = viewport;
+    this.fontScale = Phaser.Math.Clamp(viewport.width / 760, 0.85, 1.22);
     this.refreshPanelFrame();
 
     if (this.layer) {
@@ -1801,39 +1803,18 @@ export class PartyScene extends Phaser.Scene {
   }
 
   private handleScaleResize(): void {
-    this.applyLayoutProfile(getLayoutManager().getLayoutProfile());
+    this.applyLayoutProfile(getViewportManager().getViewport());
   }
 
   private refreshPanelFrame(): void {
-    const safe = getLayoutManager().getSafeMargins();
-    const width = this.scale.width;
-    const height = this.scale.height;
-
-    const sideTouchFactor =
-      this.layoutProfile.formFactor === 'mobile-landscape'
-        ? 0.34
-        : this.layoutProfile.formFactor === 'tablet'
-          ? 0.18
-          : 0.08;
-
-    const baseHorizontal = this.layoutProfile.formFactor === 'desktop' ? 24 : 16;
-    const leftInset = Math.round(safe.touchLeft * sideTouchFactor);
-    const rightInset = Math.round(safe.touchRight * sideTouchFactor);
-    const topInset = Math.max(14, safe.top + 8);
-    const bottomInset = Math.max(
-      16,
-      safe.bottom +
-        8 +
-        Math.round(safe.touchBottom * (this.layoutProfile.formFactor === 'tablet' ? 0.58 : 0.78))
-    );
-
-    const x = baseHorizontal + Math.round(safe.left * 0.6) + leftInset;
-    const y = topInset;
-    const panelWidth = Math.max(
-      260,
-      width - x - baseHorizontal - Math.round(safe.right * 0.6) - rightInset
-    );
-    const panelHeight = Math.max(180, height - y - bottomInset);
+    const safe = getViewportManager().getSafeMargins();
+    const viewport = this.viewport;
+    const baseHorizontal = viewport.formFactor === 'desktop' ? 24 : 14;
+    const baseVertical = viewport.formFactor === 'desktop' ? 18 : 12;
+    const x = viewport.x + baseHorizontal + safe.left;
+    const y = viewport.y + baseVertical + safe.top;
+    const panelWidth = Math.max(260, viewport.width - safe.left - safe.right - baseHorizontal * 2);
+    const panelHeight = Math.max(180, viewport.height - safe.top - safe.bottom - baseVertical * 2);
 
     this.panelFrame = {
       x,

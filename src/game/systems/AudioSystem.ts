@@ -16,7 +16,24 @@ type SweepOptions = {
   type?: OscillatorType;
 };
 
-type MusicTrack = 'title' | 'overworld' | 'battle';
+export type MusicTrack =
+  | 'title'
+  | 'overworld'
+  | 'battle'
+  | 'battle_normal'
+  | 'battle_boss'
+  | 'battle_final_phase'
+  | 'victory_boss';
+
+type NormalizedTrack = Exclude<MusicTrack, 'battle'>;
+
+type TrackConfig = {
+  notes: number[];
+  wave: OscillatorType;
+  stepMs: number;
+  loop: boolean;
+  gain: number;
+};
 
 type AudioMixNodes = {
   master: GainNode;
@@ -24,19 +41,58 @@ type AudioMixNodes = {
   music: GainNode;
 };
 
-const TRACK_STEP_MS = 220;
-
-const TRACK_PATTERNS: Record<MusicTrack, number[]> = {
-  title: [262, 392, 330, 392, 294, 440, 392, 330, 0, 262, 392, 330, 523, 440, 392, 0],
-  overworld: [220, 247, 262, 294, 330, 294, 262, 247, 220, 247, 262, 247, 196, 220, 247, 0],
-  battle: [196, 220, 247, 262, 247, 220, 196, 175, 196, 220, 262, 294, 262, 247, 220, 0]
+const TRACK_CONFIGS: Record<NormalizedTrack, TrackConfig> = {
+  title: {
+    notes: [262, 392, 330, 392, 294, 440, 392, 330, 0, 262, 392, 330, 523, 440, 392, 0],
+    wave: 'triangle',
+    stepMs: 220,
+    loop: true,
+    gain: 0.06
+  },
+  overworld: {
+    notes: [220, 247, 262, 294, 330, 294, 262, 247, 220, 247, 262, 247, 196, 220, 247, 0],
+    wave: 'square',
+    stepMs: 220,
+    loop: true,
+    gain: 0.055
+  },
+  battle_normal: {
+    notes: [196, 220, 247, 262, 247, 220, 196, 175, 196, 220, 262, 294, 262, 247, 220, 0],
+    wave: 'sawtooth',
+    stepMs: 210,
+    loop: true,
+    gain: 0.055
+  },
+  battle_boss: {
+    notes: [175, 196, 220, 247, 262, 220, 247, 294, 262, 247, 220, 196, 220, 247, 262, 0],
+    wave: 'sawtooth',
+    stepMs: 195,
+    loop: true,
+    gain: 0.065
+  },
+  battle_final_phase: {
+    notes: [262, 330, 294, 370, 330, 392, 370, 440, 392, 370, 330, 294, 330, 370, 440, 0],
+    wave: 'square',
+    stepMs: 175,
+    loop: true,
+    gain: 0.07
+  },
+  victory_boss: {
+    notes: [392, 440, 494, 523, 587, 659, 587, 523, 494, 440, 523, 659],
+    wave: 'triangle',
+    stepMs: 180,
+    loop: false,
+    gain: 0.075
+  }
 };
 
-const TRACK_WAVE: Record<MusicTrack, OscillatorType> = {
-  title: 'triangle',
-  overworld: 'square',
-  battle: 'sawtooth'
-};
+const normalizeTrack = (track: MusicTrack): NormalizedTrack =>
+  track === 'battle' ? 'battle_normal' : track;
+
+const waitMs = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    window.setTimeout(() => resolve(), Math.max(0, Math.floor(ms)));
+  });
 
 export class AudioSystem {
   private readonly scene: Phaser.Scene;
@@ -47,7 +103,7 @@ export class AudioSystem {
 
   private static mixNodes: AudioMixNodes | null = null;
 
-  private static currentTrack: MusicTrack | null = null;
+  private static currentTrack: NormalizedTrack | null = null;
 
   private static trackStep = 0;
 
@@ -88,6 +144,11 @@ export class AudioSystem {
     }
   }
 
+  public static getTrackDurationMs(track: MusicTrack): number {
+    const config = TRACK_CONFIGS[normalizeTrack(track)];
+    return config.stepMs * config.notes.length;
+  }
+
   public async unlock(): Promise<void> {
     if (!this.context) {
       return;
@@ -98,21 +159,75 @@ export class AudioSystem {
     }
   }
 
-  public playMusic(track: MusicTrack): void {
+  public playMusic(track: 'title' | 'overworld' | 'battle'): void {
+    void this.playTrack(track);
+  }
+
+  public async playTrack(track: MusicTrack): Promise<void> {
+    const normalized = normalizeTrack(track);
     const { musicEnabled, musicVolume } = getUserSettings();
-    AudioSystem.currentTrack = track;
+    AudioSystem.currentTrack = normalized;
 
     if (!musicEnabled || musicVolume <= 0.001) {
       AudioSystem.stopMusicLoop();
       return;
     }
 
-    AudioSystem.startMusicLoop(track);
+    AudioSystem.startMusicLoop(normalized);
+    await this.fadeIn(120);
   }
 
   public stopMusic(): void {
     AudioSystem.stopMusicLoop();
     AudioSystem.currentTrack = null;
+  }
+
+  public async fadeOut(durationMs = 220): Promise<void> {
+    const nodes = AudioSystem.mixNodes;
+    const context = AudioSystem.context;
+    if (!nodes || !context) {
+      return;
+    }
+
+    const now = context.currentTime;
+    const durationSeconds = Math.max(0.001, durationMs / 1000);
+
+    nodes.music.gain.cancelScheduledValues(now);
+    nodes.music.gain.setValueAtTime(nodes.music.gain.value, now);
+    nodes.music.gain.linearRampToValueAtTime(0, now + durationSeconds);
+
+    await waitMs(durationMs);
+  }
+
+  public async fadeIn(durationMs = 220): Promise<void> {
+    const nodes = AudioSystem.mixNodes;
+    const context = AudioSystem.context;
+    if (!nodes || !context) {
+      return;
+    }
+
+    const target = AudioSystem.getMusicTargetVolume();
+    const now = context.currentTime;
+    const durationSeconds = Math.max(0.001, durationMs / 1000);
+
+    nodes.music.gain.cancelScheduledValues(now);
+    nodes.music.gain.setValueAtTime(nodes.music.gain.value, now);
+    nodes.music.gain.linearRampToValueAtTime(target, now + durationSeconds);
+
+    await waitMs(durationMs);
+  }
+
+  public async crossfadeTo(track: MusicTrack, durationMs = 300): Promise<void> {
+    const normalized = normalizeTrack(track);
+    if (AudioSystem.currentTrack === normalized && AudioSystem.trackTimerId) {
+      await this.fadeIn(Math.max(120, durationMs));
+      return;
+    }
+
+    const halfDuration = Math.max(80, Math.floor(durationMs / 2));
+    await this.fadeOut(halfDuration);
+    await this.playTrack(normalized);
+    await this.fadeIn(halfDuration);
   }
 
   public playMenuMove(): void {
@@ -242,6 +357,15 @@ export class AudioSystem {
     return AudioSystem.mixNodes;
   }
 
+  private static getMusicTargetVolume(): number {
+    const settings = getUserSettings();
+    if (!settings.musicEnabled || settings.musicVolume <= 0.001) {
+      return 0;
+    }
+
+    return settings.musicVolume;
+  }
+
   private static applySettingsToMix(): void {
     const context = AudioSystem.context;
     const nodes = AudioSystem.mixNodes;
@@ -257,7 +381,7 @@ export class AudioSystem {
     nodes.sfx.gain.cancelScheduledValues(now);
 
     nodes.master.gain.setTargetAtTime(1, now, 0.01);
-    nodes.music.gain.setTargetAtTime(settings.musicEnabled ? settings.musicVolume : 0, now, 0.01);
+    nodes.music.gain.setTargetAtTime(AudioSystem.getMusicTargetVolume(), now, 0.01);
     nodes.sfx.gain.setTargetAtTime(settings.sfxVolume, now, 0.01);
 
     if ((!settings.musicEnabled || settings.musicVolume <= 0.001) && AudioSystem.trackTimerId) {
@@ -265,28 +389,47 @@ export class AudioSystem {
     }
   }
 
-  private static startMusicLoop(track: MusicTrack): void {
+  private static startMusicLoop(track: NormalizedTrack): void {
     const context = AudioSystem.context;
     const nodes = AudioSystem.mixNodes;
     if (!context || !nodes) {
       return;
     }
 
+    const config = TRACK_CONFIGS[track];
+
     if (AudioSystem.trackTimerId) {
       if (AudioSystem.currentTrack === track) {
         return;
       }
-
       AudioSystem.stopMusicLoop();
     }
 
     AudioSystem.currentTrack = track;
     AudioSystem.trackStep = 0;
     AudioSystem.playMusicStep(track, 0);
+
+    if (config.notes.length <= 1) {
+      return;
+    }
+
+    AudioSystem.trackStep = 1;
     AudioSystem.trackTimerId = window.setInterval(() => {
-      AudioSystem.trackStep += 1;
+      if (!AudioSystem.currentTrack || AudioSystem.currentTrack !== track) {
+        AudioSystem.stopMusicLoop();
+        return;
+      }
+
+      if (!config.loop && AudioSystem.trackStep >= config.notes.length) {
+        AudioSystem.stopMusicLoop();
+        return;
+      }
+
       AudioSystem.playMusicStep(track, AudioSystem.trackStep);
-    }, TRACK_STEP_MS);
+      AudioSystem.trackStep = config.loop
+        ? (AudioSystem.trackStep + 1) % config.notes.length
+        : AudioSystem.trackStep + 1;
+    }, config.stepMs);
   }
 
   private static stopMusicLoop(): void {
@@ -298,29 +441,33 @@ export class AudioSystem {
     AudioSystem.trackTimerId = null;
   }
 
-  private static playMusicStep(track: MusicTrack, step: number): void {
+  private static playMusicStep(track: NormalizedTrack, step: number): void {
     const context = AudioSystem.context;
     const nodes = AudioSystem.mixNodes;
     if (!context || !nodes) {
       return;
     }
 
-    const sequence = TRACK_PATTERNS[track];
-    const note = sequence[step % sequence.length];
+    const config = TRACK_CONFIGS[track];
+    if (config.notes.length === 0) {
+      return;
+    }
+
+    const note = config.notes[step % config.notes.length];
     if (!note || note <= 0) {
       return;
     }
 
     const now = context.currentTime;
-    const duration = (TRACK_STEP_MS / 1000) * 0.86;
+    const duration = (config.stepMs / 1000) * 0.86;
     const oscillator = context.createOscillator();
     const gainNode = context.createGain();
 
-    oscillator.type = TRACK_WAVE[track];
+    oscillator.type = config.wave;
     oscillator.frequency.setValueAtTime(note, now);
 
     gainNode.gain.setValueAtTime(0.0001, now);
-    gainNode.gain.linearRampToValueAtTime(0.06, now + 0.02);
+    gainNode.gain.linearRampToValueAtTime(config.gain, now + 0.02);
     gainNode.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
     oscillator.connect(gainNode);

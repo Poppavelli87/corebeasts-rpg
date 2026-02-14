@@ -5,6 +5,8 @@ import { AudioSystem } from '../systems/AudioSystem';
 import { InputAdapter } from '../systems/InputAdapter';
 import { getDialogCharsPerSecond, getUserSettings } from '../systems/UserSettings';
 import { UI_THEME } from '../ui/UiTheme';
+import { getViewportManager, type ViewportRect } from '../ui/ViewportManager';
+import { TouchControls } from '../ui/TouchControls';
 
 type IntroLine = {
   speaker: string;
@@ -52,6 +54,14 @@ const POST_NAME_LINES: IntroLine[] = [
 export class IntroScene extends Phaser.Scene {
   private audio!: AudioSystem;
 
+  private backdrop!: Phaser.GameObjects.Rectangle;
+
+  private dialogPanel!: Phaser.GameObjects.Rectangle;
+
+  private titleText!: Phaser.GameObjects.Text;
+
+  private subtitleText!: Phaser.GameObjects.Text;
+
   private speakerText!: Phaser.GameObjects.Text;
 
   private lineText!: Phaser.GameObjects.Text;
@@ -75,6 +85,8 @@ export class IntroScene extends Phaser.Scene {
   private revealIndex = 0;
 
   private revealing = false;
+
+  private viewportUnsubscribe: (() => void) | null = null;
 
   private keydownHandler = (event: KeyboardEvent): void => {
     if (this.phase !== 'naming') {
@@ -111,16 +123,14 @@ export class IntroScene extends Phaser.Scene {
   public create(): void {
     this.audio = new AudioSystem(this);
     this.audio.playMusic('title');
-    const { width, height } = this.scale;
-
-    this.add.rectangle(0, 0, width, height, 0x040912, 1).setOrigin(0);
-    this.add
-      .rectangle(0, height - 124, width, 124, 0x071526, 0.96)
+    this.backdrop = this.add.rectangle(0, 0, 10, 10, 0x040912, 1).setOrigin(0);
+    this.dialogPanel = this.add
+      .rectangle(0, 0, 10, 10, 0x071526, 0.96)
       .setOrigin(0)
       .setStrokeStyle(2, 0x8eb8dd, 1);
 
-    this.add
-      .text(width / 2, 40, 'CORE ARCHIVE', {
+    this.titleText = this.add
+      .text(0, 0, 'CORE ARCHIVE', {
         fontFamily: UI_THEME.fontFamily,
         fontSize: '30px',
         color: '#f4d97a',
@@ -129,30 +139,30 @@ export class IntroScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.add
-      .text(width / 2, 76, 'Prologue', {
+    this.subtitleText = this.add
+      .text(0, 0, 'Prologue', {
         fontFamily: UI_THEME.fontFamily,
         fontSize: '18px',
         color: '#9ecbea'
       })
       .setOrigin(0.5);
 
-    this.speakerText = this.add.text(16, height - 116, '', {
+    this.speakerText = this.add.text(0, 0, '', {
       fontFamily: UI_THEME.fontFamily,
       fontSize: '16px',
       color: '#f3e194'
     });
 
-    this.lineText = this.add.text(16, height - 92, '', {
+    this.lineText = this.add.text(0, 0, '', {
       fontFamily: UI_THEME.fontFamily,
       fontSize: '18px',
       color: '#f5fbff',
       wordWrap: {
-        width: width - 32
+        width: 360
       }
     });
 
-    this.hintText = this.add.text(width - 14, height - 14, 'Enter: Next', {
+    this.hintText = this.add.text(0, 0, 'Enter: Next', {
       fontFamily: UI_THEME.fontFamily,
       fontSize: '13px',
       color: '#9fc7e4'
@@ -161,12 +171,23 @@ export class IntroScene extends Phaser.Scene {
 
     this.input.keyboard!.on('keydown', this.keydownHandler);
     this.inputAdapter = new InputAdapter(this);
+    TouchControls.getShared().setDialogOpen(true);
+
+    this.viewportUnsubscribe = getViewportManager().onResize((viewport) => {
+      this.applyLayout(viewport);
+    });
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
+    this.applyLayout(getViewportManager().getViewport());
 
     this.showLine(PRE_NAME_LINES[this.preLineIndex]);
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.input.keyboard?.off('keydown', this.keydownHandler);
       this.stopReveal();
+      TouchControls.getShared().setDialogOpen(false);
+      this.viewportUnsubscribe?.();
+      this.viewportUnsubscribe = null;
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
     });
   }
 
@@ -296,5 +317,45 @@ export class IntroScene extends Phaser.Scene {
   private stopReveal(): void {
     this.revealEvent?.remove(false);
     this.revealEvent = null;
+  }
+
+  private handleScaleResize(): void {
+    if (!this.backdrop?.active || !this.dialogPanel?.active) {
+      return;
+    }
+
+    this.applyLayout(getViewportManager().getViewport());
+  }
+
+  private applyLayout(viewport: ViewportRect): void {
+    if (
+      !this.backdrop?.active ||
+      !this.dialogPanel?.active ||
+      !this.titleText?.active ||
+      !this.subtitleText?.active ||
+      !this.speakerText?.active ||
+      !this.lineText?.active ||
+      !this.hintText?.active
+    ) {
+      return;
+    }
+
+    const safe = getViewportManager().getSafeMargins();
+    const panelPadding = 10;
+    const panelWidth = Math.max(220, viewport.width - safe.left - safe.right - panelPadding * 2);
+    const panelHeight = Math.max(110, Math.min(146, Math.round(viewport.height * 0.34)));
+    const panelX = viewport.x + safe.left + panelPadding;
+    const panelY =
+      viewport.y + viewport.height - safe.bottom - panelHeight - Math.max(6, panelPadding - 2);
+
+    this.backdrop.setPosition(viewport.x, viewport.y).setSize(viewport.width, viewport.height);
+    this.dialogPanel.setPosition(panelX, panelY).setSize(panelWidth, panelHeight);
+
+    this.titleText.setPosition(viewport.x + viewport.width / 2, viewport.y + safe.top + 28);
+    this.subtitleText.setPosition(viewport.x + viewport.width / 2, viewport.y + safe.top + 64);
+
+    this.speakerText.setPosition(panelX + 16, panelY + 10);
+    this.lineText.setPosition(panelX + 16, panelY + 36).setWordWrapWidth(panelWidth - 32, true);
+    this.hintText.setPosition(panelX + panelWidth - 14, panelY + panelHeight - 14);
   }
 }

@@ -8,6 +8,7 @@ import { ProcSpriteFactory } from '../systems/ProcSpriteFactory';
 import { SaveSystem } from '../systems/SaveSystem';
 import {
   MAP_DEFINITIONS,
+  type BossConfig,
   type BlockedGateDefinition,
   type DialogEntry,
   type Direction,
@@ -32,8 +33,9 @@ import {
   type InventoryKey
 } from '../state/GameState';
 import { TOWN_WARP_MAPS } from '../world/WorldMaps';
-import { getLayoutManager, type LayoutProfile } from '../ui/LayoutManager';
+import { TouchControls } from '../ui/TouchControls';
 import { createBackHint, createBodyText, createHeadingText, createPanel } from '../ui/UiTheme';
+import { getViewportManager, type ViewportRect } from '../ui/ViewportManager';
 
 type InputDirection = {
   direction: Direction;
@@ -80,6 +82,7 @@ type ActiveTrainerEncounter = {
   team: CreatureInstance[];
   postBattleLines: string[];
   repeatLine?: string;
+  bossConfig?: BossConfig;
 };
 
 type TrainerTeamEntry = {
@@ -470,8 +473,8 @@ export class OverworldScene extends Phaser.Scene {
       facing: this.facing
     });
 
-    this.layoutUnsubscribe = getLayoutManager().onResize((profile) => {
-      this.applyResponsiveLayout(profile);
+    this.layoutUnsubscribe = getViewportManager().onResize((viewport) => {
+      this.applyResponsiveLayout(viewport);
     });
     this.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
 
@@ -481,6 +484,7 @@ export class OverworldScene extends Phaser.Scene {
       this.layoutUnsubscribe?.();
       this.layoutUnsubscribe = null;
       this.scale.off(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
+      TouchControls.getShared().setDialogOpen(false);
       this.closeMinimap();
     });
   }
@@ -491,6 +495,8 @@ export class OverworldScene extends Phaser.Scene {
   }
 
   private handleUpdateInput(): void {
+    TouchControls.getShared().setDialogOpen(this.dialogSystem.isActive());
+
     if (Phaser.Input.Keyboard.JustDown(this.minimapKey)) {
       this.toggleMinimap();
       this.publishOverworldState();
@@ -587,20 +593,32 @@ export class OverworldScene extends Phaser.Scene {
     this.publishOverworldState();
   }
 
-  private applyResponsiveLayout(profile: LayoutProfile): void {
+  private applyResponsiveLayout(viewport: ViewportRect): void {
     const camera = this.cameras.main;
+    camera.setViewport(viewport.x, viewport.y, viewport.width, viewport.height);
+    camera.setBackgroundColor(0x05050a);
+    camera.setBounds(0, 0, this.tileMap.getPixelWidth(), this.tileMap.getPixelHeight());
 
-    if (profile.formFactor === 'mobile-portrait') {
-      camera.setZoom(0.92);
+    const scaleBoost =
+      viewport.scale >= 1
+        ? Math.min(1.35, viewport.scale)
+        : Phaser.Math.Clamp(viewport.scale + 0.35, 0.75, 1);
+    const isMobilePortrait =
+      viewport.formFactor === 'mobile' && viewport.orientation === 'portrait';
+    const isMobileLandscape =
+      viewport.formFactor === 'mobile' && viewport.orientation === 'landscape';
+
+    if (isMobilePortrait) {
+      camera.setZoom(0.92 * scaleBoost);
       camera.setDeadzone(50, 30);
-    } else if (profile.formFactor === 'mobile-landscape') {
-      camera.setZoom(1.08);
+    } else if (isMobileLandscape) {
+      camera.setZoom(1.05 * scaleBoost);
       camera.setDeadzone(72, 46);
-    } else if (profile.formFactor === 'tablet') {
-      camera.setZoom(1.0);
+    } else if (viewport.formFactor === 'tablet') {
+      camera.setZoom(1.0 * scaleBoost);
       camera.setDeadzone(70, 44);
     } else {
-      camera.setZoom(1.0);
+      camera.setZoom(1.0 * scaleBoost);
       camera.setDeadzone(64, 40);
     }
 
@@ -614,7 +632,7 @@ export class OverworldScene extends Phaser.Scene {
   }
 
   private handleScaleResize(): void {
-    this.applyResponsiveLayout(getLayoutManager().getLayoutProfile());
+    this.applyResponsiveLayout(getViewportManager().getViewport());
   }
 
   private renderNpcs(): void {
@@ -985,7 +1003,8 @@ export class OverworldScene extends Phaser.Scene {
       npcName: npc.name,
       team,
       postBattleLines: trainer.postBattleLines,
-      repeatLine: trainer.repeatLine
+      repeatLine: trainer.repeatLine,
+      bossConfig: trainer.bossConfig
     };
 
     this.audio.beep({ frequency: 860, durationMs: 70 });
@@ -1013,8 +1032,10 @@ export class OverworldScene extends Phaser.Scene {
     camera.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       this.scene.launch(SCENE_KEYS.BATTLE, {
         battleType: 'trainer',
+        trainerId: encounter.trainerId,
         trainerName: encounter.npcName,
-        enemyTeam: encounter.team
+        enemyTeam: encounter.team,
+        bossConfig: encounter.bossConfig
       });
       this.scene.pause(SCENE_KEYS.OVERWORLD);
     });
@@ -1508,14 +1529,15 @@ export class OverworldScene extends Phaser.Scene {
     const mapPixelHeight = map.height * scale;
     const panelWidth = mapPixelWidth + 20;
     const panelHeight = mapPixelHeight + 34;
-    const safeMargins = getLayoutManager().getSafeMargins();
-    const rightOffset = Math.max(
-      8,
-      safeMargins.right + 6 + Math.round(safeMargins.touchRight * 0.35)
+    const viewport = getViewportManager().getViewport();
+    const safeMargins = getViewportManager().getSafeMargins();
+    const rightOffset = Math.max(8, safeMargins.right + 4);
+    const leftOffset = Math.max(8, safeMargins.left + 4);
+    const panelX = Math.max(
+      viewport.x + leftOffset,
+      viewport.x + viewport.width - panelWidth - rightOffset
     );
-    const leftOffset = Math.max(8, safeMargins.left + 6);
-    const panelX = Math.max(leftOffset, this.scale.width - panelWidth - rightOffset);
-    const panelY = Math.max(8, safeMargins.top + 6);
+    const panelY = Math.max(viewport.y + 8, viewport.y + safeMargins.top);
 
     const panel = createPanel(this, {
       x: panelX,

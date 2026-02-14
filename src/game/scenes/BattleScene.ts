@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { ABILITIES, type AbilityContext, type AbilityDefinition } from '../data/abilities';
+import { BOSS_BEHAVIORS, type BossContext } from '../data/bossBehaviors';
 import {
   ENCOUNTER_CREATURE_IDS,
   getCreatureDefinition,
@@ -9,7 +10,7 @@ import {
 import { getMoveDefinition, type MoveDefinition, type MoveId } from '../data/moves';
 import { SCENE_KEYS } from '../constants';
 import { AudioSystem } from '../systems/AudioSystem';
-import { BattleEngine, type BattleAction } from '../systems/BattleEngine';
+import { BattleEngine, type BattleAction, type DamageAdjusterInput } from '../systems/BattleEngine';
 import { InputAdapter } from '../systems/InputAdapter';
 import {
   applyExperienceGain,
@@ -40,7 +41,9 @@ import {
   createPanel,
   createTinyIcon
 } from '../ui/UiTheme';
-import { getLayoutManager, type LayoutProfile } from '../ui/LayoutManager';
+import { TouchControls } from '../ui/TouchControls';
+import { getViewportManager, type ViewportRect } from '../ui/ViewportManager';
+import type { BossConfig } from '../world/WorldMaps';
 
 type BattleOutcome = 'victory' | 'defeat' | 'capture' | 'escaped';
 
@@ -48,8 +51,10 @@ type BattleSceneData = {
   enemy?: CreatureInstance;
   enemyTeam?: CreatureInstance[];
   battleType?: 'wild' | 'trainer';
+  trainerId?: string;
   trainerName?: string;
   rareEncounter?: boolean;
+  bossConfig?: BossConfig;
 };
 
 type BattleCommand = 'fight' | 'bag' | 'switch' | 'run';
@@ -169,6 +174,15 @@ export class BattleScene extends Phaser.Scene {
   private battleType: 'wild' | 'trainer' = 'wild';
   private rareEncounter = false;
   private trainerName = 'Trainer';
+  private trainerId = '';
+  private bossConfig: BossConfig | null = null;
+  private bossState: Record<string, unknown> = {};
+  private bossTurnNumber = 0;
+  private bossTriggeredPhases = new Set<string>();
+  private stoneWardFlags = new Set<string>();
+  private tempDamageModifiers: Partial<Record<'player' | 'enemy', number>> = {};
+  private pendingBossMessages: string[] = [];
+  private pendingBossForceSwitchMode: 'next' | 'final' | null = null;
   private enemyTeam: CreatureInstance[] = [];
   private enemyActiveIndex = 0;
   private activePlayerIndex = 0;
@@ -226,7 +240,7 @@ export class BattleScene extends Phaser.Scene {
   private bagKey!: Phaser.Input.Keyboard.Key;
   private shiftKey!: Phaser.Input.Keyboard.Key;
   private inputAdapter!: InputAdapter;
-  private layoutProfile: LayoutProfile = getLayoutManager().getLayoutProfile();
+  private viewport: ViewportRect = getViewportManager().getViewport();
   private layoutUnsubscribe: (() => void) | null = null;
 
   public constructor() {
@@ -236,7 +250,7 @@ export class BattleScene extends Phaser.Scene {
   public create(data: BattleSceneData): void {
     this.resetRuntimeState();
     this.audio = new AudioSystem(this);
-    this.audio.playMusic('battle');
+    void this.audio.playTrack('battle_normal');
     this.gameState = getActiveGameState();
 
     if (this.gameState.party.length === 0) {
@@ -252,16 +266,20 @@ export class BattleScene extends Phaser.Scene {
     }
 
     this.battleType = data.battleType ?? 'wild';
+    this.trainerId = data.trainerId?.trim() ?? '';
     this.rareEncounter = this.battleType === 'wild' && (data.rareEncounter ?? false);
     this.trainerName = data.trainerName?.trim() || 'Trainer';
+    this.bossConfig = this.battleType === 'trainer' ? (data.bossConfig ?? null) : null;
+    this.bossState.damageModifier = 1;
     this.enemyTeam = this.createInitialEnemyTeam(data);
     this.enemyActiveIndex = 0;
     if (this.battleType === 'wild' && this.enemyTeam[0]) {
       this.rareEncounter = this.rareEncounter || isRareSpecies(this.enemyTeam[0].speciesId);
     }
 
-    this.layoutProfile = getLayoutManager().getLayoutProfile();
+    this.viewport = getViewportManager().getViewport();
     this.battlePanelTop = this.getBattleLayout().battlePanelY;
+    TouchControls.getShared().setDialogOpen(false);
 
     this.rebuildEngineFromActive();
     this.drawBackground();
@@ -288,8 +306,8 @@ export class BattleScene extends Phaser.Scene {
       this.resetRuntimeState();
     });
 
-    this.layoutUnsubscribe = getLayoutManager().onResize((profile) => {
-      this.applyLayoutProfile(profile);
+    this.layoutUnsubscribe = getViewportManager().onResize((viewport) => {
+      this.applyLayoutProfile(viewport);
     });
     this.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
 
@@ -359,8 +377,8 @@ export class BattleScene extends Phaser.Scene {
     };
   }
 
-  private applyLayoutProfile(profile: LayoutProfile): void {
-    this.layoutProfile = profile;
+  private applyLayoutProfile(viewport: ViewportRect): void {
+    this.viewport = viewport;
     this.battlePanelTop = this.getBattleLayout().battlePanelY;
     this.drawBackground();
 
@@ -389,7 +407,7 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private handleScaleResize(): void {
-    this.applyLayoutProfile(this.layoutProfile);
+    this.applyLayoutProfile(getViewportManager().getViewport());
   }
 
   private repositionCombatSprites(): void {
@@ -456,32 +474,27 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private getBattleLayout(): BattleLayout {
-    const safe = getLayoutManager().getSafeMargins();
-    const width = this.scale.width;
-    const height = this.scale.height;
-    const formFactor = this.layoutProfile.formFactor;
-
-    const isPortraitMobile = formFactor === 'mobile-portrait';
-    const isLandscapeMobile = formFactor === 'mobile-landscape';
-    const isTablet = formFactor === 'tablet';
+    const safe = getViewportManager().getSafeMargins();
+    const viewport = this.viewport;
+    const width = viewport.width;
+    const height = viewport.height;
+    const originX = viewport.x;
+    const originY = viewport.y;
+    const isPortraitMobile =
+      viewport.formFactor === 'mobile' && viewport.orientation === 'portrait';
+    const isLandscapeMobile =
+      viewport.formFactor === 'mobile' && viewport.orientation === 'landscape';
+    const isTablet = viewport.formFactor === 'tablet';
 
     const panelHeight = isPortraitMobile
       ? Math.max(128, Math.round(height * 0.23))
       : Math.max(126, Math.min(140, Math.round(height * 0.28)));
 
-    const panelBottomInset =
-      safe.bottom +
-      (isPortraitMobile
-        ? Math.round(safe.touchBottom * 1.2)
-        : isLandscapeMobile
-          ? Math.round(safe.touchBottom * 0.2)
-          : isTablet
-            ? Math.round(safe.touchBottom * 0.24)
-            : 8);
+    const panelBottomInset = safe.bottom + (isPortraitMobile ? 12 : isLandscapeMobile ? 8 : 10);
 
+    let battlePanelX = Math.max(8, safe.left + 8);
     const battlePanelY = Math.max(0, height - panelHeight - Math.max(8, panelBottomInset));
-    let battlePanelX = 0;
-    let battlePanelWidth = width;
+    let battlePanelWidth = Math.max(220, width - safe.left - safe.right - 16);
 
     let enemySpriteX = 430;
     let enemySpriteY = 104;
@@ -494,7 +507,7 @@ export class BattleScene extends Phaser.Scene {
     let panelWidth = 302;
 
     if (isPortraitMobile) {
-      panelWidth = Math.max(260, width - 24);
+      panelWidth = Math.max(220, width - safe.left - safe.right - 24);
       enemySpriteX = Math.round(width * 0.5);
       enemySpriteY = Math.max(58, Math.round(height * 0.2));
       playerSpriteX = Math.round(width * 0.5);
@@ -504,13 +517,8 @@ export class BattleScene extends Phaser.Scene {
       playerPanelX = Math.round((width - panelWidth) / 2);
       playerPanelY = Math.max(enemyPanelY + 82, battlePanelY - 84);
     } else if (isLandscapeMobile) {
-      const sideInsetLeft = Math.round(safe.touchLeft * 0.96);
-      const sideInsetRight = Math.round(safe.touchRight * 0.96);
-      battlePanelX = Math.max(8, sideInsetLeft + 8);
-      const minBattleWidth = 240;
-      const maxSideInsetRight = Math.max(8, width - battlePanelX - minBattleWidth - 8);
-      const adjustedSideInsetRight = Phaser.Math.Clamp(sideInsetRight, 8, maxSideInsetRight);
-      battlePanelWidth = Math.max(220, width - battlePanelX - adjustedSideInsetRight - 8);
+      battlePanelX = Math.max(8, safe.left + 8);
+      battlePanelWidth = Math.max(220, width - safe.left - safe.right - 16);
 
       panelWidth = Math.max(220, Math.min(280, battlePanelWidth - 16));
       enemySpriteX = battlePanelX + Math.round(battlePanelWidth * 0.74);
@@ -522,22 +530,9 @@ export class BattleScene extends Phaser.Scene {
       playerPanelX = enemyPanelX;
       playerPanelY = Math.max(12, battlePanelY - 84);
     } else if (isTablet) {
-      const tabletLandscape = this.layoutProfile.orientation === 'landscape';
-      const tabletLeftInset = tabletLandscape
-        ? Math.max(Math.round(width * 0.2), Math.round(safe.touchLeft * 1.24))
-        : Math.round(safe.touchLeft * 0.78);
-      const desiredTabletRightInset = tabletLandscape
-        ? Math.max(Math.round(width * 0.18), Math.round(safe.touchRight * 1.18))
-        : Math.round(safe.touchRight * 0.78);
-      battlePanelX = Math.max(8, tabletLeftInset + 8);
-      const minBattleWidth = tabletLandscape ? 250 : 260;
-      const maxTabletRightInset = Math.max(8, width - battlePanelX - minBattleWidth - 8);
-      const adjustedTabletRightInset = Phaser.Math.Clamp(
-        desiredTabletRightInset,
-        8,
-        maxTabletRightInset
-      );
-      battlePanelWidth = Math.max(230, width - battlePanelX - adjustedTabletRightInset - 8);
+      const tabletLandscape = viewport.orientation === 'landscape';
+      battlePanelX = Math.max(8, safe.left + 8);
+      battlePanelWidth = Math.max(230, width - safe.left - safe.right - 16);
 
       panelWidth = Math.max(220, Math.min(tabletLandscape ? 292 : 300, battlePanelWidth - 16));
       enemySpriteX = battlePanelX + Math.round(battlePanelWidth * 0.74);
@@ -556,27 +551,27 @@ export class BattleScene extends Phaser.Scene {
     const bagPanelX = battlePanelX + battlePanelWidth - bagPanelWidth - 8;
 
     return {
-      enemySpriteX,
-      enemySpriteY,
-      playerSpriteX,
-      playerSpriteY,
-      enemyPanelX,
-      enemyPanelY,
+      enemySpriteX: enemySpriteX + originX,
+      enemySpriteY: enemySpriteY + originY,
+      playerSpriteX: playerSpriteX + originX,
+      playerSpriteY: playerSpriteY + originY,
+      enemyPanelX: enemyPanelX + originX,
+      enemyPanelY: enemyPanelY + originY,
       enemyPanelWidth: panelWidth,
-      playerPanelX,
-      playerPanelY,
+      playerPanelX: playerPanelX + originX,
+      playerPanelY: playerPanelY + originY,
       playerPanelWidth: panelWidth,
-      battlePanelX,
-      battlePanelY,
+      battlePanelX: battlePanelX + originX,
+      battlePanelY: battlePanelY + originY,
       battlePanelWidth,
       battlePanelHeight: panelHeight,
-      movePanelX,
-      movePanelY: Math.max(12, battlePanelY - (isPortraitMobile ? 132 : 82)),
+      movePanelX: movePanelX + originX,
+      movePanelY: originY + Math.max(12, battlePanelY - (isPortraitMobile ? 132 : 82)),
       movePanelWidth,
       movePanelCompactHeight: isPortraitMobile ? 104 : 56,
       movePanelExpandedHeight: isPortraitMobile ? 146 : 108,
-      bagPanelX,
-      bagPanelY: Math.max(14, battlePanelY - 132),
+      bagPanelX: bagPanelX + originX,
+      bagPanelY: originY + Math.max(14, battlePanelY - 132),
       bagPanelWidth,
       bagPanelHeight: 118
     };
@@ -653,7 +648,9 @@ export class BattleScene extends Phaser.Scene {
     });
     this.battlePanel = panel;
 
-    const messageFontSize = this.layoutProfile.formFactor === 'mobile-portrait' ? 14 : 16;
+    const isPortraitMobile =
+      this.viewport.formFactor === 'mobile' && this.viewport.orientation === 'portrait';
+    const messageFontSize = isPortraitMobile ? 14 : 16;
     this.messageText = createBodyText(this, panel.x + 12, panel.y + 8, '', {
       size: messageFontSize,
       color: '#f6f8ff',
@@ -769,6 +766,10 @@ export class BattleScene extends Phaser.Scene {
     const enemy = this.getActiveEnemyCreature();
     const enemyName = enemy ? this.getCreatureLabel(enemy) : 'Corebeast';
 
+    if (this.isBossBattle()) {
+      await this.audio.crossfadeTo('battle_boss', 260);
+    }
+
     await this.playSendOutAnimation('player');
 
     if (this.battleType === 'wild') {
@@ -786,6 +787,7 @@ export class BattleScene extends Phaser.Scene {
     const player = this.getActivePlayerCreature();
     this.triggerAbilityHook('onEnter', player, enemy);
     this.triggerAbilityHook('onEnter', enemy, player);
+    await this.runBossStartBehavior();
     await this.flushMessageQueue();
 
     if (this.battleResolved) {
@@ -1009,7 +1011,8 @@ export class BattleScene extends Phaser.Scene {
     const moveIds = [...player.moves];
     const totalOptions = moveIds.length + 1;
     const compactLayout =
-      this.layoutProfile.formFactor === 'mobile-portrait' || this.scale.width < 560;
+      (this.viewport.formFactor === 'mobile' && this.viewport.orientation === 'portrait') ||
+      layout.battlePanelWidth < 560;
     let columns = 4;
     if (compactLayout) {
       columns = totalOptions >= 5 ? 3 : 2;
@@ -1020,7 +1023,7 @@ export class BattleScene extends Phaser.Scene {
     const spacing = 8;
     const buttonHeight = rows > 1 ? 34 : 40;
     const panelHeight = 16 + rows * buttonHeight + (rows - 1) * spacing;
-    const panelY = Math.max(12, this.battlePanelTop - panelHeight - 8);
+    const panelY = Math.max(this.viewport.y + 12, this.battlePanelTop - panelHeight - 8);
 
     this.movePanel = this.add
       .rectangle(layout.movePanelX, panelY, layout.movePanelWidth, panelHeight, 0x071321, 0.96)
@@ -1603,13 +1606,15 @@ export class BattleScene extends Phaser.Scene {
     this.selectedSwitchIndex = 0;
 
     const rowCount = this.gameState.party.length + (forced ? 0 : 1);
-    const rowHeight = this.layoutProfile.formFactor === 'mobile-portrait' ? 24 : 26;
+    const rowHeight =
+      this.viewport.formFactor === 'mobile' && this.viewport.orientation === 'portrait' ? 24 : 26;
     const rowGap = 4;
     const headerHeight = 34;
+    const viewport = this.viewport;
     const panelHeight = headerHeight + rowCount * (rowHeight + rowGap) + 10;
-    const panelWidth = Math.min(520, this.scale.width - 24);
-    const panelX = (this.scale.width - panelWidth) / 2;
-    const panelY = Math.max(10, (this.scale.height - panelHeight) / 2);
+    const panelWidth = Math.min(520, viewport.width - 24);
+    const panelX = viewport.x + Math.round((viewport.width - panelWidth) / 2);
+    const panelY = viewport.y + Math.max(10, Math.round((viewport.height - panelHeight) / 2));
 
     this.switchPanel = this.add
       .rectangle(panelX, panelY, panelWidth, panelHeight, 0x06111f, 0.96)
@@ -1903,6 +1908,7 @@ export class BattleScene extends Phaser.Scene {
     this.actionInProgress = true;
     this.closeBag();
     this.closeMoveSelection();
+    this.bossTurnNumber += 1;
 
     await this.triggerTurnStartAbilities();
 
@@ -1925,6 +1931,7 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    this.bossTurnNumber += 1;
     await this.triggerTurnStartAbilities();
 
     if (await this.tryExecuteHardSwitchBeforeEnemyAction()) {
@@ -2161,6 +2168,7 @@ export class BattleScene extends Phaser.Scene {
 
   private async resolveAfterTurn(): Promise<void> {
     await this.triggerLowHpAbilities();
+    await this.runBossTurnBehaviors();
 
     const enemy = this.getActiveEnemyCreature();
     if (enemy && enemy.currentHp <= 0) {
@@ -2268,6 +2276,345 @@ export class BattleScene extends Phaser.Scene {
         }
       }
     };
+  }
+
+  private isBossBattle(): boolean {
+    return this.battleType === 'trainer' && this.bossConfig !== null;
+  }
+
+  private async runBossStartBehavior(): Promise<void> {
+    if (!this.isBossBattle() || !this.bossConfig?.onBattleStartActionId) {
+      return;
+    }
+
+    this.runBossBehaviorAction(this.bossConfig.onBattleStartActionId);
+    await this.flushMessageQueue();
+    await this.handleBossMusicAndSwitchQueue();
+  }
+
+  private async runBossTurnBehaviors(): Promise<void> {
+    if (!this.isBossBattle() || this.battleResolved) {
+      return;
+    }
+
+    const activeEnemy = this.getActiveEnemyCreature();
+    if (!activeEnemy || activeEnemy.currentHp <= 0) {
+      return;
+    }
+
+    this.evaluateBossPhaseTriggers();
+
+    if (this.bossConfig?.specialBehaviorId) {
+      this.runBossBehaviorAction(this.bossConfig.specialBehaviorId);
+    }
+
+    await this.flushMessageQueue();
+    await this.handleBossMusicAndSwitchQueue();
+  }
+
+  private runBossBehaviorAction(actionId: string): void {
+    const behavior = BOSS_BEHAVIORS[actionId];
+    if (!behavior) {
+      return;
+    }
+
+    behavior(this.buildBossContext());
+  }
+
+  private buildBossContext(): BossContext {
+    return {
+      activeCreature: this.getActiveEnemyCreature(),
+      opponentCreature: this.getActivePlayerCreature(),
+      battleState: {
+        ...this.bossState,
+        turnNumber: this.bossTurnNumber
+      },
+      scene: this,
+      enqueueMessage: (text, options) => {
+        const trimmed = text.trim();
+        if (trimmed.length <= 0) {
+          return;
+        }
+
+        this.enqueueMessage(trimmed, {
+          durationMs: options?.durationMs ?? 560,
+          mode: options?.locked ? 'locked' : 'fast'
+        });
+      },
+      applyStatus: (target, status) => {
+        this.applyBossStatus(target, status);
+      },
+      modifyDamageTemp: (multiplier, target = 'active') => {
+        this.setTemporaryDamageModifier(target, multiplier);
+      },
+      forceSwitch: (mode = 'next') => {
+        this.queueBossForceSwitch(mode);
+      },
+      setBattleModifier: (key, value) => {
+        this.setBossModifier(key, value);
+      }
+    };
+  }
+
+  private normalizeBossStatus(
+    status: CreatureInstance['status'] | 'gloom' | 'root' | 'shock'
+  ): CreatureInstance['status'] {
+    if (status === 'gloom') {
+      return 'poison';
+    }
+
+    if (status === 'root' || status === 'shock') {
+      return 'stun';
+    }
+
+    return status;
+  }
+
+  private applyBossStatus(
+    target: 'active' | 'opponent' | 'both',
+    status: CreatureInstance['status'] | 'gloom' | 'root' | 'shock'
+  ): void {
+    const normalized = this.normalizeBossStatus(status);
+    const enemy = this.getActiveEnemyCreature();
+    const player = this.getActivePlayerCreature();
+
+    if ((target === 'active' || target === 'both') && enemy) {
+      enemy.status = normalized;
+      this.updateEnemyCombatantPanel(enemy);
+    }
+
+    if ((target === 'opponent' || target === 'both') && player) {
+      player.status = normalized;
+      this.updatePlayerCombatantPanel(player);
+    }
+
+    this.rebuildEngineFromActive();
+    this.publishBattleState();
+  }
+
+  private setTemporaryDamageModifier(
+    target: 'active' | 'opponent' | 'both',
+    multiplier: number
+  ): void {
+    if (!Number.isFinite(multiplier) || multiplier <= 0) {
+      return;
+    }
+
+    if (target === 'active' || target === 'both') {
+      this.tempDamageModifiers.enemy = multiplier;
+    }
+
+    if (target === 'opponent' || target === 'both') {
+      this.tempDamageModifiers.player = multiplier;
+    }
+  }
+
+  private setBossModifier(key: string, value: unknown): void {
+    if (key === 'damageModifierDelta') {
+      const delta = Number(value);
+      if (!Number.isFinite(delta)) {
+        return;
+      }
+
+      const current = Number(this.bossState.damageModifier ?? 1);
+      this.bossState.damageModifier = Phaser.Math.Clamp(current + delta, 0.5, 2.5);
+      return;
+    }
+
+    this.bossState[key] = value;
+
+    if (key === 'stoneWardSetupRequested' && value === true) {
+      this.initializeStoneWardFlags();
+      this.bossState.stoneWardSetupRequested = false;
+    }
+  }
+
+  private queueBossForceSwitch(mode: 'next' | 'final'): void {
+    if (this.pendingBossForceSwitchMode === 'final') {
+      return;
+    }
+
+    if (mode === 'final') {
+      this.pendingBossForceSwitchMode = 'final';
+      return;
+    }
+
+    if (!this.pendingBossForceSwitchMode) {
+      this.pendingBossForceSwitchMode = 'next';
+    }
+  }
+
+  private async handleBossMusicAndSwitchQueue(): Promise<void> {
+    if (this.consumeBossFlag('triggerFinalPhaseMusic')) {
+      await this.audio.crossfadeTo('battle_final_phase', 400);
+    }
+
+    await this.processBossForceSwitchQueue();
+  }
+
+  private consumeBossFlag(key: string): boolean {
+    if (this.bossState[key] !== true) {
+      return false;
+    }
+
+    this.bossState[key] = false;
+    return true;
+  }
+
+  private async processBossForceSwitchQueue(): Promise<void> {
+    const mode = this.pendingBossForceSwitchMode;
+    if (!mode) {
+      return;
+    }
+
+    this.pendingBossForceSwitchMode = null;
+    const targetIndex = this.findBossSwitchTarget(mode);
+    if (targetIndex === null) {
+      return;
+    }
+
+    await this.performBossEnemySwitch(targetIndex);
+  }
+
+  private findBossSwitchTarget(mode: 'next' | 'final'): number | null {
+    const aliveIndices = this.enemyTeam
+      .map((creature, index) => ({ creature, index }))
+      .filter((entry) => entry.creature.currentHp > 0 && entry.index !== this.enemyActiveIndex)
+      .map((entry) => entry.index);
+
+    if (aliveIndices.length === 0) {
+      return null;
+    }
+
+    if (mode === 'final') {
+      return aliveIndices[aliveIndices.length - 1] ?? null;
+    }
+
+    const forward = aliveIndices.find((index) => index > this.enemyActiveIndex);
+    return forward ?? aliveIndices[0] ?? null;
+  }
+
+  private async performBossEnemySwitch(targetIndex: number): Promise<void> {
+    const currentEnemy = this.getActiveEnemyCreature();
+    if (!currentEnemy || targetIndex === this.enemyActiveIndex) {
+      return;
+    }
+
+    this.syncCombatantsFromEngine();
+    await this.playWithdrawAnimation('enemy');
+
+    this.enemyActiveIndex = targetIndex;
+    this.rebuildEngineFromActive();
+    this.refreshEnemyVisual();
+    await this.playSendOutAnimation('enemy');
+
+    const nextEnemy = this.getActiveEnemyCreature();
+    if (!nextEnemy) {
+      return;
+    }
+
+    await this.showQueuedMessages(
+      [`${this.trainerName} sent out ${this.getCreatureLabel(nextEnemy)}!`],
+      520
+    );
+    this.triggerAbilityHook('onEnter', nextEnemy, this.getActivePlayerCreature());
+    await this.flushMessageQueue();
+  }
+
+  private evaluateBossPhaseTriggers(): void {
+    const triggers = this.bossConfig?.phaseTriggers;
+    if (!triggers || triggers.length <= 0) {
+      return;
+    }
+
+    const enemy = this.getActiveEnemyCreature();
+    triggers.forEach((trigger, index) => {
+      const triggerKey = `${index}:${trigger.actionId}`;
+      if (this.bossTriggeredPhases.has(triggerKey)) {
+        return;
+      }
+
+      let matched = false;
+      if (trigger.condition === 'turnNumber') {
+        matched = this.bossTurnNumber >= Math.max(1, Math.floor(trigger.value));
+      } else if (
+        trigger.condition === 'hpBelowPercent' &&
+        enemy &&
+        enemy.currentHp > 0 &&
+        enemy.stats.hp > 0
+      ) {
+        const hpPercent = (enemy.currentHp / enemy.stats.hp) * 100;
+        matched = hpPercent <= trigger.value;
+      }
+
+      if (!matched) {
+        return;
+      }
+
+      this.bossTriggeredPhases.add(triggerKey);
+      this.runBossBehaviorAction(trigger.actionId);
+    });
+  }
+
+  private initializeStoneWardFlags(): void {
+    this.stoneWardFlags.clear();
+
+    this.gameState.party.forEach((creature, index) => {
+      if (creature.currentHp > 0) {
+        this.stoneWardFlags.add(`player:${index}`);
+      }
+    });
+
+    this.enemyTeam.forEach((creature, index) => {
+      if (creature.currentHp > 0) {
+        this.stoneWardFlags.add(`enemy:${index}`);
+      }
+    });
+  }
+
+  private applyDamageAdjustments(input: DamageAdjusterInput): number {
+    let adjusted = Math.max(1, Math.floor(input.damage));
+
+    const globalModifier = Number(this.bossState.damageModifier ?? 1);
+    if (Number.isFinite(globalModifier) && globalModifier > 0) {
+      adjusted = Math.max(1, Math.floor(adjusted * globalModifier));
+    }
+
+    const tempModifier = this.tempDamageModifiers[input.defender];
+    if (typeof tempModifier === 'number' && Number.isFinite(tempModifier) && tempModifier > 0) {
+      adjusted = Math.max(1, Math.floor(adjusted * tempModifier));
+      delete this.tempDamageModifiers[input.defender];
+    }
+
+    if (this.consumeStoneWard(input.defender)) {
+      adjusted = Math.max(1, Math.floor(adjusted * 0.5));
+      const defender =
+        input.defender === 'player'
+          ? this.getActivePlayerCreature()
+          : this.getActiveEnemyCreature();
+      if (defender) {
+        this.pendingBossMessages.push(
+          `${this.getCreatureLabel(defender)}'s Stone Ward absorbed the blow!`
+        );
+      }
+    }
+
+    return Math.max(1, Math.floor(adjusted));
+  }
+
+  private consumeStoneWard(defender: 'player' | 'enemy'): boolean {
+    if (this.bossState.stoneWardEnabled !== true) {
+      return false;
+    }
+
+    const slotKey =
+      defender === 'player' ? `player:${this.activePlayerIndex}` : `enemy:${this.enemyActiveIndex}`;
+    if (!this.stoneWardFlags.has(slotKey)) {
+      return false;
+    }
+
+    this.stoneWardFlags.delete(slotKey);
+    return true;
   }
 
   private async handleEnemyFaintFlow(): Promise<void> {
@@ -2385,8 +2732,20 @@ export class BattleScene extends Phaser.Scene {
       }
     }
 
+    if (this.isBossBattle()) {
+      await this.playBossVictoryMusic();
+    }
+
     this.pendingXpByPartyIndex.clear();
     await this.endBattle('victory');
+  }
+
+  private async playBossVictoryMusic(): Promise<void> {
+    await this.audio.fadeOut(220);
+    await this.audio.playTrack('victory_boss');
+    await this.wait(Math.min(2200, AudioSystem.getTrackDurationMs('victory_boss')));
+    await this.audio.fadeOut(180);
+    await this.audio.playTrack('overworld');
   }
 
   private async handleLevelUp(
@@ -2489,10 +2848,11 @@ export class BattleScene extends Phaser.Scene {
     const rowHeight = 22;
     const rowGap = 2;
     const headerHeight = 34;
+    const viewport = this.viewport;
     const panelHeight = headerHeight + optionCount * (rowHeight + rowGap) + 8;
-    const panelWidth = Math.min(312, this.scale.width - 24);
-    const panelX = (this.scale.width - panelWidth) / 2;
-    const panelY = Math.max(16, this.battlePanelTop - panelHeight - 8);
+    const panelWidth = Math.min(312, viewport.width - 24);
+    const panelX = viewport.x + Math.round((viewport.width - panelWidth) / 2);
+    const panelY = Math.max(this.viewport.y + 16, this.battlePanelTop - panelHeight - 8);
 
     this.replaceMovePanel = this.add
       .rectangle(panelX, panelY, panelWidth, panelHeight, 0x06111f, 0.96)
@@ -2692,8 +3052,9 @@ export class BattleScene extends Phaser.Scene {
     });
 
     this.tweens.killTweensOf(this.playerSprite);
+    const viewport = this.viewport;
     const flash = this.add
-      .rectangle(0, 0, this.scale.width, this.scale.height, 0xffffff, 0)
+      .rectangle(viewport.x, viewport.y, viewport.width, viewport.height, 0xffffff, 0)
       .setOrigin(0)
       .setDepth(110);
 
@@ -2872,6 +3233,13 @@ export class BattleScene extends Phaser.Scene {
     this.audio.beep({ frequency: 300, durationMs: 90, type: 'triangle' });
     await this.playAttackImpact(action.attacker, action.defender, isBigHit);
     await this.animateHpBar(targetHp, action.remainingHp);
+
+    if (this.pendingBossMessages.length > 0) {
+      const queued = [...this.pendingBossMessages];
+      this.pendingBossMessages = [];
+      await this.showQueuedMessages(queued, 540);
+    }
+
     this.triggerAbilityHook('onHit', defender, attacker);
     await this.flushMessageQueue();
     await this.wait(70);
@@ -3225,6 +3593,10 @@ export class BattleScene extends Phaser.Scene {
       this.cameras.main.fadeOut(280, 0, 0, 0);
     });
 
+    if (!(this.isBossBattle() && outcome === 'victory')) {
+      await this.audio.playTrack('overworld');
+    }
+
     this.registry.set('battleState', null);
     this.scene.resume(SCENE_KEYS.OVERWORLD, {
       source: 'battle',
@@ -3285,7 +3657,8 @@ export class BattleScene extends Phaser.Scene {
       this.cloneCreature(activePlayer),
       this.cloneCreature(activeEnemy),
       {
-        enemyStatusEffectChance: enemyStatusChance
+        enemyStatusEffectChance: enemyStatusChance,
+        damageAdjuster: (input) => this.applyDamageAdjustments(input)
       }
     );
   }
@@ -3451,10 +3824,11 @@ export class BattleScene extends Phaser.Scene {
     }
 
     const layout = this.getBattleLayout();
+    const viewport = this.viewport;
     const graphics = this.battleBackground;
     graphics.clear();
     graphics.fillGradientStyle(0x16223a, 0x16223a, 0x0b101d, 0x0b101d, 1);
-    graphics.fillRect(0, 0, this.scale.width, this.scale.height);
+    graphics.fillRect(viewport.x, viewport.y, viewport.width, viewport.height);
     graphics.fillStyle(0x21304b, 0.45);
     graphics.fillEllipse(layout.enemySpriteX, layout.enemySpriteY + 30, 166, 52);
     graphics.fillStyle(0x1a2b42, 0.45);
@@ -3593,6 +3967,15 @@ export class BattleScene extends Phaser.Scene {
     this.abilityEventTags.clear();
     this.enemyHardSwitchUsed = false;
     this.rareEncounter = false;
+    this.trainerId = '';
+    this.bossConfig = null;
+    this.bossState = {};
+    this.bossTurnNumber = 0;
+    this.bossTriggeredPhases.clear();
+    this.stoneWardFlags.clear();
+    this.tempDamageModifiers = {};
+    this.pendingBossMessages = [];
+    this.pendingBossForceSwitchMode = null;
   }
 
   private publishBattleState(): void {
@@ -3627,7 +4010,10 @@ export class BattleScene extends Phaser.Scene {
       battleType: this.battleType,
       rareEncounter: this.rareEncounter,
       difficulty: this.gameState.difficulty,
+      trainerId: this.trainerId,
       trainerName: this.trainerName,
+      bossActive: this.isBossBattle(),
+      bossTurnNumber: this.bossTurnNumber,
       playerActiveIndex: this.activePlayerIndex,
       enemyActiveIndex: this.enemyActiveIndex,
       enemyTeam: this.enemyTeam.map((entry, index) => ({

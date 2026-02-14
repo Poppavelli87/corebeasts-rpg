@@ -10,6 +10,7 @@ type BattleRole = 'player' | 'enemy';
 type BattleEngineOptions = {
   rng?: () => number;
   enemyStatusEffectChance?: number;
+  damageAdjuster?: (input: DamageAdjusterInput) => number;
 };
 
 type StatStages = {
@@ -69,6 +70,14 @@ export type BattleTurnResult = {
   };
 };
 
+export type DamageAdjusterInput = {
+  attacker: BattleRole;
+  defender: BattleRole;
+  move: MoveDefinition;
+  damage: number;
+  multiplier: number;
+};
+
 const clampStage = (value: number): number => Phaser.Math.Clamp(value, -3, 3);
 
 const stageMultiplier = (stage: number): number => 1 + stage * 0.25;
@@ -77,6 +86,8 @@ export class BattleEngine {
   private readonly rng: () => number;
 
   private readonly enemyStatusEffectChance: number;
+
+  private readonly damageAdjuster?: (input: DamageAdjusterInput) => number;
 
   private player: BattleCombatant;
 
@@ -89,6 +100,7 @@ export class BattleEngine {
   ) {
     this.rng = options.rng ?? Math.random;
     this.enemyStatusEffectChance = Phaser.Math.Clamp(options.enemyStatusEffectChance ?? 1, 0, 1);
+    this.damageAdjuster = options.damageAdjuster;
     this.player = this.createCombatant('player', playerSeed);
     this.enemy = this.createCombatant('enemy', enemySeed);
   }
@@ -242,14 +254,28 @@ export class BattleEngine {
     }
 
     const damage = this.calculateDamage(attacker, defender, move);
-    defender.currentHp = Math.max(0, defender.currentHp - damage.value);
+    const adjustedDamage = this.damageAdjuster
+      ? Math.max(
+          1,
+          Math.floor(
+            this.damageAdjuster({
+              attacker: role,
+              defender: role === 'player' ? 'enemy' : 'player',
+              move,
+              damage: damage.value,
+              multiplier: damage.multiplier
+            })
+          )
+        )
+      : damage.value;
+    defender.currentHp = Math.max(0, defender.currentHp - adjustedDamage);
 
     actions.push({
       type: 'damage',
       attacker: role,
       defender: role === 'player' ? 'enemy' : 'player',
       move,
-      damage: damage.value,
+      damage: adjustedDamage,
       remainingHp: defender.currentHp,
       multiplier: damage.multiplier
     });

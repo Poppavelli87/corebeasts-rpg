@@ -1,0 +1,1 @@
+{"coordinateSystem":"origin: top-left (0,0), +x: right, +y: down","activeScene":"OverworldScene","activeScenes":["OverworldScene"],"titleMenu":["New Game","Continue","Settings","Quit"],"overworldState":{"mapId":"healHouse","player":{"x":5,"y":5,"facing":"up","moving":false},"facingTile":{"x":5,"y":4},"dialogActive":false,"transitioning":false,"npcs":[]}}

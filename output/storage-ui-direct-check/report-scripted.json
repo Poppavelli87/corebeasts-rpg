@@ -1,0 +1,48 @@
+{
+  "seedInfo": {
+    "party": 2,
+    "storage": 2,
+    "activeScenes": [
+      "OverworldScene",
+      "DebugOverlayScene"
+    ]
+  },
+  "scripted": {
+    "start": {
+      "mode": "storageManager",
+      "tab": "party",
+      "party": 2,
+      "storage": 2
+    },
+    "afterMoveToParty": {
+      "mode": "storageManager",
+      "tab": "storage",
+      "party": 3,
+      "storage": 1,
+      "saveExists": true
+    },
+    "afterMoveToStorage": {
+      "mode": "storageManager",
+      "tab": "party",
+      "party": 2,
+      "storage": 2,
+      "saveExists": true
+    },
+    "afterRelease": {
+      "mode": "storageManager",
+      "tab": "storage",
+      "party": 2,
+      "storage": 1,
+      "saveExists": true
+    },
+    "afterClose": {
+      "activeScenes": [
+        "PartyScene",
+        "DebugOverlayScene"
+      ],
+      "saveExists": true,
+      "saveLength": 761
+    }
+  },
+  "errors": []
+}

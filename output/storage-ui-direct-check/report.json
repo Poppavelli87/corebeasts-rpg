@@ -1,0 +1,44 @@
+{
+  "seeded": {
+    "party": 2,
+    "storage": 2,
+    "activeScenes": [
+      "OverworldScene",
+      "DebugOverlayScene"
+    ]
+  },
+  "afterMoveToParty": {
+    "mode": "storageManager",
+    "tab": "party",
+    "party": 2,
+    "storage": 2,
+    "saveExists": false
+  },
+  "afterMoveToStorage": {
+    "mode": "storageManager",
+    "tab": "party",
+    "party": 2,
+    "storage": 2,
+    "saveExists": false
+  },
+  "afterRelease": {
+    "mode": "storageManager",
+    "tab": "party",
+    "party": 2,
+    "storage": 2,
+    "saveExists": false,
+    "activeScenes": [
+      "PartyScene",
+      "DebugOverlayScene"
+    ]
+  },
+  "afterClose": {
+    "activeScenes": [
+      "PartyScene",
+      "DebugOverlayScene"
+    ],
+    "saveExists": false,
+    "saveLength": 0
+  },
+  "errors": []
+}

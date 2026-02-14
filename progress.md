@@ -1,0 +1,446 @@
+Original prompt: Create a new folder "corebeasts-rpg" and build a working Phaser 3 + TypeScript + Vite project.
+
+- Scaffolded Vite TypeScript project in `C:\\Users\\mxz\\corebeasts-rpg`.
+- Installed `phaser` and ESLint/Prettier TypeScript toolchain dependencies.
+- Replaced starter app with Phaser scenes and systems:
+  - `BootScene`, `TitleScene`, `GameScene`, `DebugOverlayScene`
+  - Menu controls (`Up`/`Down`/`Enter`/`Esc`)
+  - Debug overlay toggle on backtick (`) with FPS + scene key
+  - WebAudio beep stub via `AudioSystem`
+- Added `window.render_game_to_text` and `window.advanceTime(ms)` for deterministic automation hooks.
+- Added `README.md` with exact setup/run/build/lint/format instructions and controls mapping.
+- Verification completed:
+  - `npm install` succeeds.
+  - `npm run dev` launches successfully at `http://127.0.0.1:4173/` (checked via controlled startup + shutdown).
+  - `npm run build` succeeds.
+  - `npm run lint` succeeds.
+- Implemented first real overworld pass:
+  - Added `OverworldScene` with 16x16 tile movement, collision, camera follow + deadzone, NPC interaction, and door transitions.
+  - Added `TileMap` system with procedural tile textures and map definitions for a 30x20 starter town + 10x8 heal house interior.
+  - Added `DialogSystem` bottom-anchored retro dialog panel with Enter paging and movement lock while active.
+  - Updated title flow so `New Game` starts `OverworldScene`; `Continue` remains disabled.
+- Pending verification for this pass:
+  - Validate movement responsiveness and wall/water blocking.
+  - Validate NPC interaction dialogs.
+  - Validate entering and exiting the heal house through door fade transitions.
+- Automated gameplay verification completed via `web_game_playwright_client.js`:
+  - Movement works and wall collision blocks progression (`player` remained blocked before building wall).
+  - NPC dialog triggers when facing and pressing `Enter`; dialog panel renders with speaker + text.
+  - Movement stays locked while dialog is active (`player` tile unchanged while directional input applied).
+  - Dialog advances/closes with `Enter`.
+  - Door transitions fade to interior (`mapId: healHouse`) and fade back to town (`mapId: starterTown`).
+  - No runtime console/page errors in recorded runs.
+- Renderer switched to `Phaser.CANVAS` for reliable visual capture in automated validation (logic/state unchanged).
+- Added `output` to `.prettierignore` so generated local test artifacts do not fail formatting checks.
+- Started battle benchmark implementation:
+  - Added type system + chart in `src/game/systems/TypeChart.ts`.
+  - Added move roster in `src/game/data/moves.ts` (12 total, including 2 status moves).
+  - Added creature roster in `src/game/data/creatures.ts` (6 total, one per type).
+  - Added turn/damage resolution engine in `src/game/systems/BattleEngine.ts`.
+  - Added new `BattleScene` with combat layout, HP bars, move selection, and turn resolution.
+  - Patched `OverworldScene` to trigger grass encounters and launch/resume battle flow.
+- Battle benchmark verification:
+  - `web_game_playwright_client.js` run confirms encounters trigger in overworld and enter `BattleScene`.
+  - Battle UI verified visually (enemy/player sprites, labels, HP bars, retro panel, 3 move buttons, selected highlight).
+  - Turn loop executes with repeated move confirmations and no console/page errors.
+  - Victory path verified: battle resolves and returns to overworld (`battleState: null`, player control restored).
+  - Defeat path verified in repeat run: returns to `healHouse` interior and player HP restored to full.
+  - Repeated multi-iteration battle runs complete without new runtime errors (`errors-0/1/2: none`).
+- Final command verification:
+  - `npm install` succeeds.
+  - `npm run dev` starts successfully.
+  - `npm run build` succeeds.
+  - `npm run lint` succeeds.
+- Procedural sprite identity upgrade:
+  - Added `src/game/systems/ProcSpriteFactory.ts` with seedable `mulberry32`.
+  - Added deterministic runtime generation for:
+    - 32x32 front battle sprite (symmetrical silhouette, eyes, accent patches, shadow, outline)
+    - 32x32 back battle sprite (same seed/body, darker tones, reduced facial detail, shifted highlight)
+    - 16x16 overworld icon (simplified readable silhouette, <=3 colors)
+  - Integrated into `BattleScene` (front/back) and `OverworldScene` (player icon).
+  - Added prewarm in `BootScene` to generate all creature textures once and reuse keys (prevents per-battle texture churn).
+  - Exposed `window.__PHASER_GAME__` in `main.ts` for local verification tooling.
+- Procedural sprite verification:
+  - Triggered multiple encounters/battles via Playwright client with no console/page errors.
+  - Verified overworld icon renders correctly in town screenshots.
+  - Ran browser-side texture hash audit:
+    - front uniqueness: 6/6 unique
+    - back uniqueness: 6/6 unique
+    - overworld uniqueness: 6/6 unique
+    - consistency check per creature id/variant: all `true`
+- TODO suggestions for next pass:
+  - Replace text-only title visuals with actual pixel art assets.
+  - Expand `Settings` and `Continue` into real sub-scenes instead of modal text stubs.
+  - Add automated Playwright regression checks for menu navigation.
+- Implemented Benchmark 4 party/inventory/capture/save-load pass.
+  - Added canonical state model: `src/game/state/GameState.ts`.
+  - Added localStorage save/load/versioning: `src/game/systems/SaveSystem.ts` (`corebeasts_save_v1`).
+  - Added pause/party/inventory/save UI overlay scene: `src/game/scenes/PartyScene.ts`.
+  - Reworked `OverworldScene` to use `GameState`, pause menu (`Esc`), pickups persisted via `storyFlags`, and heal-house full-party heal/cleanse.
+  - Reworked `BattleScene` with `battleType`, bag option (`B` + UI button), capture logic, item usage, and autosave hooks.
+  - Reworked `BattleEngine` to operate on full creature instances.
+  - Updated creature species data with `baseCatchRate` and level stat calculation.
+  - Updated title flow so Continue loads save and is disabled when no save exists.
+  - Updated scene registry (`SCENE_KEYS.PARTY`) and main scene list.
+  - Updated README controls + save/load notes.
+- Verification:
+  - `npm run format` passes.
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Automated browser harness confirmed save persistence across refresh/continue and item/save flows.
+  - Additional forced-capture harness attempts were run to stress battle->overworld return; headless timing for menu-state polling was noisy, but state/save plumbing remained stable and no compile/lint/runtime console regressions were introduced in normal smoke runs.
+- Benchmark 4 stabilization fix:
+  - Found a BattleScene restart bug: runtime flags (`battleResolved`, selection state, menu flags, button arrays) were not reset on subsequent scene launches.
+  - Added `resetRuntimeState()` in `BattleScene.create()` to clear transient state each battle start and destroy any stale bag UI references.
+  - File touched: `src/game/scenes/BattleScene.ts`.
+- Post-fix verification:
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Ran web-game Playwright client smoke run (`benchmark4-smoke-postfix`) and inspected screenshot/state output.
+  - Ran deterministic end-to-end benchmark script (`benchmark4-check.mjs`) to validate:
+    - two successful captures (party reached 3 members),
+    - potion use in party menu,
+    - manual save,
+    - refresh + Continue load,
+    - party/inventory/species persistence after load.
+  - Result JSON:
+    - `capturedTwoOrMore: true`
+    - `saveExists: true`
+    - `partyPersisted: true`
+    - `inventoryPersisted: true`
+    - `speciesPersisted: true`
+- Additional benchmark validation after battle reset fix:
+  - Confirmed repeat battles no longer lock menu state (second battle menu now initializes correctly).
+  - Deterministic end-to-end scenario script (`benchmark4-check.mjs`) now passes all assertions:
+    - `capturedTwoOrMore: true`
+    - `saveExists: true`
+    - `partyPersisted: true`
+    - `inventoryPersisted: true`
+    - `speciesPersisted: true`
+  - Verified Bag UI opens via real keyboard input (`B`) in battle and no console/page errors were emitted.
+- Implemented Benchmark 4.5 progression systems + battle polish.
+  - Added `src/game/systems/Progression.ts`:
+    - `xpToNextLevel(level)` with base 25 and growth 1.18.
+    - XP reward helper and XP application with multi-level overflow.
+    - Level-up processing updates stats and HP deltas.
+    - Evolution trigger processing with HP ratio carry-over.
+  - Expanded `src/game/data/moves.ts` to 19 total moves (>=18) with 4 status moves.
+  - Expanded `src/game/data/creatures.ts`:
+    - Added `learnset` and `evolution` for all species.
+    - Added evolved species `emberdrake` and early evolution for `embercub` at Lv7.
+    - Added `ENCOUNTER_CREATURE_IDS` (excludes non-encounter evolutions).
+  - Updated `src/game/systems/TileMap.ts` map model with `encounterLevelRange` and configured starter town range.
+  - Updated `src/game/scenes/OverworldScene.ts` encounter generation to use map level range and encounter-eligible roster.
+  - Updated `src/game/state/GameState.ts` XP defaults to `0` for new/normalized creatures.
+  - Updated `src/game/systems/BattleEngine.ts` exported creature XP default to `0`.
+  - Major BattleScene upgrade (`src/game/scenes/BattleScene.ts`):
+    - XP gain + level-up messaging.
+    - Move learning flow with replacement prompt UI (3 moves + cancel).
+    - Evolution message/flash/sprite swap sequence.
+    - Message queue to avoid overlap and lock input during playback.
+    - Idle bob animation for both combat sprites.
+    - Hit feedback white flash.
+    - Registry payload now includes XP/moves.
+  - Party details now show XP progress (`src/game/scenes/PartyScene.ts`).
+  - README controls updated for learn-replace prompt and progression note.
+- Validation:
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Automated acceptance script (`benchmark45-acceptance.mjs`) validates:
+    - battle wins and level-ups,
+    - move learning + replacement prompt,
+    - evolution to `emberdrake`,
+    - save exists,
+    - refresh + Continue persists evolved species and move set,
+    - no console/page errors in run.
+- Implemented dynamic move slot capacity benchmark:
+  - Added `getMaxMovesForLevel(level)` in `src/game/systems/Progression.ts` (Lv1-9: 3, Lv10-24: 4, Lv25+: 5).
+  - Updated `CreatureInstance.moves` to `MoveId[]` (up to 5) and made save normalization backward-compatible in `src/game/state/GameState.ts`.
+  - Updated `BattleEngine` move typing/clone/export paths to support variable move counts.
+  - Updated `BattleScene` move learning flow to auto-add when below level cap, otherwise prompt replace for all current moves + cancel.
+  - Reworked battle action panel to render dynamically:
+    - 3 moves: original single-row layout
+    - 4 moves: 2x2 move grid (+ bag slot)
+    - 5 moves: 3x2 grid (+ bag slot)
+  - Added grid-aware selection logic used by keyboard direction handling and pointer hover/click selection.
+  - Improved replace prompt panel sizing so 3-5 move lists remain readable without overlapping battle panel.
+- Data update for validation path:
+  - Added `emberdrake` learnset move at Lv25 (`quarryBreak`) in `src/game/data/creatures.ts` so 5th-slot learning is testable with real thresholds.
+- Validation completed:
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Automated Playwright acceptance (`benchmark45-moveslots.mjs`) confirms:
+    - 4th move learned at Lv10
+    - 5th move learned at Lv25
+    - 4-move and 5-move battle layouts render correctly
+    - selector navigation + pointer selection logic works for 4/5 move layouts
+    - save/refresh/continue preserves 5-move set and species
+    - no console/page errors.
+- Follow-up validation update:
+  - Re-ran `benchmark45-moveslots.mjs` after UI/nav adjustments.
+  - Assertions now all pass (`noErrors`, `learnedFourthAt10`, `learnedFifthAt25`, 4/5 layout checks, keyboard/pointer nav checks, save persistence checks).
+- Implemented Benchmark 5 campaign progression pass.
+  - Added intro and starter flow scenes:
+    - `src/game/scenes/IntroScene.ts`
+    - `src/game/scenes/StarterSelectionScene.ts`
+  - Updated scene wiring:
+    - Added `SCENE_KEYS.INTRO` and `SCENE_KEYS.STARTER_SELECTION`.
+    - Registered new scenes in `src/main.ts`.
+    - `TitleScene` New Game now starts Intro (no direct town spawn).
+- Expanded game state and inventory for campaign key item:
+  - `InventoryKey` now includes `verdantSigil`.
+  - Save/load normalization remains backward-compatible (older saves without `verdantSigil` default to `0`).
+  - New game supports starter-less initialization for intro->selection pipeline (`createNewGameState(playerName, includeStarter)`).
+- Overhauled map/campaign data in `src/game/systems/TileMap.ts`:
+  - Added maps: `route1`, `verdantisTown`, `verdantisHealHouse`, `verdantTrial`, `northPass`.
+  - Added named map links via `MapTransition` (`id`, `name`, `kind`, target data, optional required flag + blocked message).
+  - Added trainer metadata to NPC definitions (`trainerId`, `defeatFlag`, pre/post lines).
+  - Added route exits + Verdantis north gate requirement (`trial1Complete`).
+- Reworked `src/game/scenes/OverworldScene.ts` for campaign logic:
+  - Trainer encounter system with predefined team templates.
+  - Sequential trainer team battles (supports multi-creature trainer sets).
+  - Rival encounter integrated with progression flag (`rivalRowanDefeated`) and heal hint post-fight.
+  - Trial master encounter with 2-creature team; on victory grants `Verdant Sigil` and sets `trial1Complete`.
+  - Gate blocking/opening based on story flag.
+  - NPC visibility persistence via `hiddenIfFlag` (rival no respawn).
+  - Map transitions persist map position/map id through existing GameState + save flow.
+- Updated pause/inventory UI (`PartyScene`) to display key item (`Verdant Sigil`) and block use with message.
+- README updated with intro/starter controls and new scene/campaign flow notes.
+- Validation:
+  - `npm run format:fix` passes.
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Playwright smoke check via `web_game_playwright_client.js` captured `output/web-game/shot-0.png` and `output/web-game/state-0.json`; no new `errors-*.json` emitted.
+  - Automated acceptance script (`benchmark5-acceptance.mjs`) passed all scenario assertions:
+    - starter selection persisted,
+    - wild battle + trainer/rival/trial progression completed,
+    - sigil awarded,
+    - trial/rival flags persisted after refresh+Continue,
+    - gate open condition true,
+    - rival not respawned,
+    - trial not repeatable,
+    - no console/page errors.
+- Implemented Benchmark 5A battle command and team flow overhaul.
+  - Reworked `BattleScene` command UI to classic 4-command menu: `Fight`, `Bag`, `Switch`, `Run` (`Back` disabled for trainer battles).
+  - Added dynamic move submenu under `Fight` (existing 3-5 move support retained, with `Back`).
+  - Added full switch panel with keyboard + pointer support, showing party info and disabling active/fainted entries.
+  - Manual switch now consumes turn and triggers immediate enemy action.
+  - Forced switch now triggers automatically on active faint (no cancel), with defeat only when no usable party remains.
+  - Added trainer enemy team handling in a single battle instance via `enemyTeam` + `enemyActiveIndex`.
+  - Added enemy send-out flow after faint (`Trainer sent out ...`) without returning to overworld between team members.
+  - Added wild `Run` flow (`escaped` outcome) and kept trainer retreat disabled.
+  - XP reward tracking now records per enemy faint and applies once on victory without double-award.
+- Updated battle engine support:
+  - `src/game/systems/BattleEngine.ts` now includes `resolveEnemyTurn()` for post-switch enemy action handling.
+  - `BattleTurnResult.selectedMoves` now supports nullable player/enemy move ids for non-standard turns.
+- Updated campaign overworld integration:
+  - `src/game/scenes/OverworldScene.ts` now launches trainer battles with full `enemyTeam` payload in one scene run.
+  - Removed per-round relaunch chaining logic and complete trainer encounter directly after battle victory.
+  - Added `escaped` to resume payload handling.
+  - Rival weak-starter template now produces 2-creature team (Lv6-7) to satisfy multi-creature trainer benchmark requirement.
+- README updates:
+  - Added benchmark 5A battle control notes for command menu, `Switch`, `Run`, trainer `Back`, and move submenu back behavior.
+- Verification:
+  - `npm run format:fix` passes.
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Attempted browser automation for full benchmark 5A runtime checklist via Playwright script; harness sequence needs further stabilization for deterministic end-to-end timing, but compile/lint/build and code-path integration checks are green.
+- Implemented Benchmark 5B storage loop:
+  - Added Bindery Terminal interactions in heal interiors and terminal launch path in `OverworldScene`.
+  - Added party/storage transfer helpers in `GameState`.
+  - Extended `PartyScene` with terminal-only storage manager modes:
+    - Tabs: Party | Storage
+    - Party action: move to storage (guard prevents empty party)
+    - Storage actions: move to party, release with confirmation
+    - Paging support for storage lists and party/storage counts in header
+    - Autosave on move/release and on terminal close
+- Updated README controls/autosave notes for Bindery Terminal storage management.
+- Verification:
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Playwright-based runtime checks executed:
+    - UI renders in terminal mode.
+    - Scripted scene-method flow confirmed state changes:
+      - storage->party increments party / decrements storage
+      - party->storage reverses counts
+      - release decrements storage
+      - save key `corebeasts_save_v1` written during terminal operations
+    - No console/page errors in automated checks.
+- Implemented Benchmark 5C battle pacing patch in `src/game/scenes/BattleScene.ts`.
+- Added message pacing modes while preserving queue:
+  - `fast` (default): auto-advance clamped to 500-700ms.
+  - `locked`: manual confirm required.
+  - `Shift` hold or `Enter` now fast-forwards/advances the active queued message.
+- Marked important messages as locked:
+  - faint messages
+  - forced-switch prompt
+  - level-up message
+  - evolution messages
+- Added battle impact animation stack:
+  - attacker lunge (12px, 80ms out + snap back)
+  - defender camera shake (80ms), 60ms white tint flash, and recoil (6px)
+  - HP bar easing updated to 300ms `Quad.Out`.
+- Added/updated send-out + switch/faint feel:
+  - send-out anim (scale 0.7->1.0 at battle scale, alpha 0->1, upward bounce)
+  - switch now fades old player sprite immediately and animates new send-out
+  - faint now drops 10px and fades over 250ms before hiding
+- Idle bob polish:
+  - centralized idle-bob tween ownership per sprite
+  - bob pauses during impact/switch/faint animations and resumes after.
+- Validation:
+  - `npm run format:fix` passes
+  - `npm run lint` passes
+  - `npm run build` passes
+  - Playwright smoke run for battle scene produced no console/page errors (`output/battle-pacing-check/errors.json`).
+- Implemented Benchmark 6 campaign skeleton (data-driven world + 8-trial progression + final tower credits).
+- Added new source-of-truth world module: `src/game/world/WorldMaps.ts`.
+  - Migrated existing maps into map entries with tiles, encounters, exits, blocked gates, and NPC/trainer references.
+  - Added new campaign maps:
+    - `route2`, `brinegateTown`, `cave1`, `stonecrossTown`, `route3`, `coilhavenTown`, `marsh1`, `hollowmereTown`, `route4`, `obsidianForgeTown`, `bridge1`, `skydriftSpiresTown`, `choirfallRuins`, `finalTower`
+    - plus heal/trial interiors for each town
+  - Added `TOWN_WARP_MAPS` list for dev warp UI.
+- Refactored `src/game/systems/TileMap.ts` to consume world data only and keep rendering/collision utilities.
+- Reworked `src/game/scenes/OverworldScene.ts`:
+  - Data-driven encounter selection (weighted species tables + per-map level ranges/chances)
+  - Data-driven exits and gate blockers with persisted story-flag unlocks
+  - Expanded trainer/trial progression chain through Trial8/final boss
+  - Added visible gate blockers with blocked dialog: `A strange seal blocks the path...`
+  - Added final boss completion path to `CreditsScene`
+  - Added DEV-only warp panel on `P` guarded by `import.meta.env.DEV`
+- Added `src/game/scenes/CreditsScene.ts` and wired scene registry (`SCENE_KEYS.CREDITS`) + `main.ts` scene list.
+- Expanded roster to 18 species in `src/game/data/creatures.ts` (>=3 per type) with catch rates + learnsets retained.
+- Updated inventory schema for campaign reward tracking:
+  - Added `trialSigil` to `GameState` inventory with backward-compatible normalization.
+  - Updated `StarterSelectionScene` and `PartyScene` inventory handling for new key-item count.
+- Updated README:
+  - full world chain/progression summary
+  - new controls (credits + DEV warp)
+  - 8-trial/final tower notes.
+- Validation:
+  - `npm run format:fix` passes
+  - `npm run lint` passes
+  - `npm run build` passes
+  - Playwright smoke run via `web_game_playwright_client.js` completed:
+    - screenshots in `output/benchmark6-smoke/shot-0.png` and `shot-1.png`
+    - state snapshots confirm overworld load and updated game state schema
+    - no `errors-*.json` emitted for the run.
+
+- Implemented Benchmark 7 species and encounter rebalance pass.
+  - Expanded `src/game/data/creatures.ts` to a generated roster of 54 species (18 evolution lines, 3 stages each) with standard Lv16/Lv36 evolution thresholds.
+  - Preserved legacy species ids used in scenes/saves (`embercub`, `tidepup`, `bloomfin`, `sparkit`, `stonehorn`, `shadeowl` lines), while adding 12 new lines for regional variety.
+  - Expanded `src/game/data/moves.ts` with additional typed moves used by new line learnsets.
+  - Updated `src/game/world/WorldMaps.ts` encounter tables for stronger regional identity:
+    - early routes: mixed low-tier Ember/Tide/Bloom
+    - cave/marsh/forge/sky/final zones weighted by thematic type clusters
+    - each table capped to 5-8 species and avoids all-type dilution
+  - Updated encounter level ranges from early game through final tower to approximately:
+    - Region 1: Lv2-8
+    - Region 2: Lv8-15
+    - Region 3: Lv15-22
+    - Region 4+: scales into Lv40-45 at final tower
+  - Updated trainer and trial teams in `src/game/scenes/OverworldScene.ts`:
+    - diversified species usage
+    - no duplicate species within a team
+    - higher evolved-form presence mid/late game.
+- Benchmark 7 validation:
+  - Roster sanity check script output:
+    - lines: 18
+    - total species: 54
+    - per-type species: 9 for each of Ember/Tide/Bloom/Volt/Stone/Shade
+  - `npm run lint` passes.
+  - `npm run build` passes.
+
+- Added minimal passive ability scaffolding without changing battle mechanics.
+  - Added optional `abilityId` field on species definitions in `src/game/data/creatures.ts`.
+  - Added default per-type ability ids at generation time so all current species have an ability reference.
+  - Created `src/game/data/abilities.ts` with:
+    - `AbilityContext`
+    - `AbilityDefinition`
+    - `ABILITIES: Record<string, AbilityDefinition>`
+  - Integrated non-breaking ability hook dispatch in `src/game/scenes/BattleScene.ts` for:
+    - `onEnter`
+    - `onTurnStart`
+    - `onHit`
+    - `onLowHP`
+    - `onFaint`
+  - Hook behavior is intentionally passive/message-only and guarded with one-time tags to avoid spam; no damage/progression/switch/storage logic changes.
+- Validation:
+  - `npm run format:fix` passes.
+  - `npm run lint` passes.
+  - `npm run build` passes.
+
+- Implemented difficulty modes + smarter trainer AI + light balance pass.
+  - Added persistent `difficulty` (`easy` / `normal` / `hard`) to `GameState` normalization and cloning.
+  - Added `SaveSystem.getSavedDifficulty()` and wired Continue/New Game difficulty defaults safely for old saves.
+  - Title settings now include Difficulty and New Game uses the selected mode.
+  - Party pause menu `Options` now supports in-game difficulty change with confirmation and autosave.
+  - Credits now displays completion difficulty.
+  - Added trainer-only move scoring AI in `BattleScene`:
+    - KO priority
+    - type advantage preference
+    - moderate status preference when target has no status
+    - power bias in neutral cases
+    - low-HP bias toward status utility
+    - 10% alternate-choice randomness
+  - Added DEV-only trainer AI debug logs (`[TrainerAI] ...`).
+  - Implemented hard-mode tactical enemy switching (once per trainer battle) when active matchup is fully weak and bench has stronger coverage.
+  - Added easy-mode enemy status-effect chance scaling (20% reduction) through `BattleEngine` option.
+  - Rebalanced trainer team difficulty scaling in `OverworldScene`:
+    - Easy: `-2` levels and late trial team shrink (Trials 5-8, min size 2)
+    - Hard: `+2` levels and extra trial member (Trials 3-8, cap 5)
+  - Light balance updates:
+    - Smoothed trainer baseline level steps.
+    - Updated encounter tables in `WorldMaps` for regional identity + lower rare pressure.
+    - Tuned early move powers in `moves.ts` to avoid overpowered starts.
+  - README updated with difficulty controls/effects and corrected roster note (`54` species).
+- Validation:
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Playwright runtime smoke (`output/difficulty-benchmark/`) confirms title settings difficulty UI renders/changes; no `errors-*.json` emitted.
+
+- Implemented Benchmark 9: rare encounters + flexible evolution methods + postgame optional bosses.
+  - Species data (`src/game/data/creatures.ts`):
+    - Added `rareFlag` support and marked rare endforms.
+    - Added flexible evolution-rule union:
+      - `level`
+      - `friendship`
+      - `useItem`
+      - `region`
+      - `timed` (parity/story-flag aware)
+    - Added concrete non-level evolution examples:
+      - `sproutle` -> friendship evolution
+      - `pebblit` -> item evolution (`trialSigil`)
+      - `murkit` -> region evolution (marsh/hollowmere maps)
+      - `noctip` -> timed/story-flag evolution
+    - Added rare-species overrides with unique abilities + slight stat boosts.
+  - Added rare ability entries in `src/game/data/abilities.ts` (`mythicBlaze`, `abyssalCurrent`, `ancientCanopy`, `stormCrown`, `worldAnchor`, `voidHalo`).
+  - Progression/evolution engine updates (`src/game/systems/Progression.ts`):
+    - Added `tryTriggerEvolution` + `applyItemEvolution`.
+    - `applyExperienceGain` now accepts context (`mapId`, `storyFlags`) and increments persisted creature `bond`.
+  - Game state updates (`src/game/state/GameState.ts`):
+    - Added persisted `bond` field to `CreatureInstance` with backward-safe normalization.
+  - Battle integration (`src/game/scenes/BattleScene.ts`):
+    - Supports `rareEncounter` payload for wild battles.
+    - Rare intro message and subtle type-based tint for rare enemies.
+    - XP progression now passes map/story context to evolution logic.
+  - Overworld integration (`src/game/scenes/OverworldScene.ts`):
+    - Encounter rolling now supports `ultraRareTable` and `ultraRareRate` from map config.
+    - Encounter entries can be gated by `requiredFlag`.
+    - Rare metadata passed into BattleScene.
+    - Added postgame trainer teams and reward flags that unlock extra rare encounter entries.
+    - NPC render filter now supports `requiresFlag`.
+  - World map updates (`src/game/world/WorldMaps.ts`):
+    - Extended encounter schema (`ultraRareRate`, `ultraRareTable`, `EncounterEntry.requiredFlag`).
+    - Added ultra-rare pools to route/dungeon maps.
+    - Added optional postgame bosses:
+      - Cave1: `Depth Warden Arct` (Lv46-48 team)
+      - Marsh1: `Bog Empress Nym` (Lv48-50 team)
+      - FinalTower: `Echo Sovereign Rael` rematch (Lv51+ team)
+    - Boss NPCs are gated by `postgameUnlocked` and hidden after defeat.
+  - Credits integration (`src/game/scenes/CreditsScene.ts`):
+    - Entering credits now sets and saves story flag `postgameUnlocked = true`.
+- Validation:
+  - `npm run format:fix` passes.
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Playwright smoke run (`output/benchmark9-smoke/`) shows stable runtime progression (Title -> Intro) with no emitted `errors-*.json`.

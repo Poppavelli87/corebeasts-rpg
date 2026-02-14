@@ -26,6 +26,7 @@ import {
   type UserSettings
 } from '../systems/UserSettings';
 import { ProcSpriteFactory } from '../systems/ProcSpriteFactory';
+import { getLayoutManager, type LayoutProfile } from '../ui/LayoutManager';
 import {
   UI_THEME,
   createBackHint,
@@ -135,6 +136,14 @@ export class PartyScene extends Phaser.Scene {
     storage: 0
   };
 
+  private layoutProfile: LayoutProfile = getLayoutManager().getLayoutProfile();
+
+  private panelFrame = { x: 24, y: 20, width: 592, height: 320 };
+
+  private fontScale = 1;
+
+  private layoutUnsubscribe: (() => void) | null = null;
+
   public constructor() {
     super(SCENE_KEYS.PARTY);
   }
@@ -161,8 +170,16 @@ export class PartyScene extends Phaser.Scene {
     this.layer = this.add.container(0, 0).setDepth(20_000);
 
     this.inputAdapter = new InputAdapter(this);
+    this.layoutUnsubscribe = getLayoutManager().onResize((profile) => {
+      this.applyLayoutProfile(profile);
+    });
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
 
-    this.renderView();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.layoutUnsubscribe?.();
+      this.layoutUnsubscribe = null;
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
+    });
   }
 
   public update(): void {
@@ -694,6 +711,8 @@ export class PartyScene extends Phaser.Scene {
   private renderView(): void {
     this.layer.removeAll(true);
 
+    this.refreshPanelFrame();
+
     const { width, height } = this.scale;
 
     const backdrop = this.add
@@ -702,10 +721,10 @@ export class PartyScene extends Phaser.Scene {
       .setScrollFactor(0);
 
     const panel = createPanel(this, {
-      x: 24,
-      y: 20,
-      width: width - 48,
-      height: height - 40,
+      x: this.panelFrame.x,
+      y: this.panelFrame.y,
+      width: this.panelFrame.width,
+      height: this.panelFrame.height,
       fillColor: 0x081324,
       fillAlpha: 0.96,
       strokeColor: 0x87b5dc,
@@ -741,6 +760,8 @@ export class PartyScene extends Phaser.Scene {
     }
 
     createBackHint(this, this.launchedFromTerminal ? 'Esc: Close' : 'Esc: Back', {
+      x: panel.x + panel.width - 10,
+      y: panel.y + panel.height - 8,
       container: this.layer,
       depth: 20010
     });
@@ -752,14 +773,14 @@ export class PartyScene extends Phaser.Scene {
     subtitle?: string
   ): void {
     createHeadingText(this, panel.x + 14, panel.y + 10, title, {
-      size: 20,
+      size: this.scaleFont(20),
       color: UI_THEME.headingColor,
       container: this.layer
     });
 
     if (subtitle) {
       createBodyText(this, panel.x + 14, panel.y + 36, subtitle, {
-        size: 13,
+        size: this.scaleFont(13),
         color: '#9ec3df',
         container: this.layer
       });
@@ -1658,7 +1679,7 @@ export class PartyScene extends Phaser.Scene {
       row.y + 9,
       `${options.selected ? '>' : ' '} ${options.text}`,
       {
-        size: 14,
+        size: this.scaleFont(14),
         color: options.selected ? UI_THEME.accentColor : UI_THEME.bodyColor
       }
     );
@@ -1767,5 +1788,62 @@ export class PartyScene extends Phaser.Scene {
   private getCreatureLabel(creature: CreatureInstance): string {
     const fallback = getCreatureDefinition(creature.speciesId).name;
     return creature.nickname ?? fallback;
+  }
+
+  private applyLayoutProfile(profile: LayoutProfile): void {
+    this.layoutProfile = profile;
+    this.fontScale = Phaser.Math.Clamp(profile.fontScale, 0.9, 1.22);
+    this.refreshPanelFrame();
+
+    if (this.layer) {
+      this.renderView();
+    }
+  }
+
+  private handleScaleResize(): void {
+    this.applyLayoutProfile(getLayoutManager().getLayoutProfile());
+  }
+
+  private refreshPanelFrame(): void {
+    const safe = getLayoutManager().getSafeMargins();
+    const width = this.scale.width;
+    const height = this.scale.height;
+
+    const sideTouchFactor =
+      this.layoutProfile.formFactor === 'mobile-landscape'
+        ? 0.34
+        : this.layoutProfile.formFactor === 'tablet'
+          ? 0.18
+          : 0.08;
+
+    const baseHorizontal = this.layoutProfile.formFactor === 'desktop' ? 24 : 16;
+    const leftInset = Math.round(safe.touchLeft * sideTouchFactor);
+    const rightInset = Math.round(safe.touchRight * sideTouchFactor);
+    const topInset = Math.max(14, safe.top + 8);
+    const bottomInset = Math.max(
+      16,
+      safe.bottom +
+        8 +
+        Math.round(safe.touchBottom * (this.layoutProfile.formFactor === 'tablet' ? 0.58 : 0.78))
+    );
+
+    const x = baseHorizontal + Math.round(safe.left * 0.6) + leftInset;
+    const y = topInset;
+    const panelWidth = Math.max(
+      260,
+      width - x - baseHorizontal - Math.round(safe.right * 0.6) - rightInset
+    );
+    const panelHeight = Math.max(180, height - y - bottomInset);
+
+    this.panelFrame = {
+      x,
+      y,
+      width: panelWidth,
+      height: panelHeight
+    };
+  }
+
+  private scaleFont(baseSize: number): number {
+    return Math.max(10, Math.round(baseSize * this.fontScale));
   }
 }

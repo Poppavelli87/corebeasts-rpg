@@ -54,6 +54,14 @@ Mobile / Touch:
 - Right side `MENU`: open/close pause menu.
 - Title screen includes a mobile `Fullscreen` button (top-right).
 
+Responsive layout profiles:
+
+- `mobile-portrait`: stacked battle HUD and bottom controls.
+- `mobile-landscape`: side controls with centered battle/action panels.
+- `tablet`: wider spacing and side-safe battle panel positioning.
+- `desktop`: default keyboard-first layout.
+- Layout reflows live on resize/orientation change without scene reload.
+
 ## Build + Distribution
 
 ### Web Build (shareable zip)

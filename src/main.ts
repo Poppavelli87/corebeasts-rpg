@@ -10,6 +10,7 @@ import { OverworldScene } from './game/scenes/OverworldScene';
 import { PartyScene } from './game/scenes/PartyScene';
 import { StarterSelectionScene } from './game/scenes/StarterSelectionScene';
 import { TitleScene } from './game/scenes/TitleScene';
+import { getLayoutManager } from './game/ui/LayoutManager';
 
 const sceneList: Phaser.Types.Scenes.SceneType[] = [
   BootScene,
@@ -33,24 +34,38 @@ if (!app) {
 }
 
 app.innerHTML = '<div id="game-root"></div>';
+const initialLayout = getLayoutManager().getLayoutProfile();
 
 const game = new Phaser.Game({
   type: Phaser.CANVAS,
   parent: 'game-root',
-  width: GAME_WIDTH,
-  height: GAME_HEIGHT,
+  width: initialLayout.width || GAME_WIDTH,
+  height: initialLayout.height || GAME_HEIGHT,
   backgroundColor: '#05050a',
   pixelArt: true,
   antialias: false,
   roundPixels: true,
   scale: {
-    mode: Phaser.Scale.FIT,
+    mode: Phaser.Scale.RESIZE,
+    expandParent: true,
     autoCenter: Phaser.Scale.CENTER_BOTH
   },
   scene: sceneList
 });
 
 window.__PHASER_GAME__ = game;
+
+const applyViewportResize = (): void => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  game.scale.resize(window.innerWidth, window.innerHeight);
+};
+
+window.addEventListener('resize', applyViewportResize, { passive: true });
+window.addEventListener('orientationchange', applyViewportResize, { passive: true });
+applyViewportResize();
 
 const canvas = game.canvas;
 if (canvas) {
@@ -71,6 +86,8 @@ if (canvas) {
   });
 
   game.events.once(Phaser.Core.Events.DESTROY, () => {
+    window.removeEventListener('resize', applyViewportResize);
+    window.removeEventListener('orientationchange', applyViewportResize);
     canvas.removeEventListener('touchmove', preventCanvasTouchScroll);
     canvas.removeEventListener('touchstart', preventCanvasTouchScroll);
     canvas.removeEventListener('gesturestart', preventCanvasTouchScroll as EventListener);

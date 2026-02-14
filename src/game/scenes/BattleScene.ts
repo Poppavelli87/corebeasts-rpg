@@ -10,7 +10,6 @@ import { getMoveDefinition, type MoveDefinition, type MoveId } from '../data/mov
 import { SCENE_KEYS } from '../constants';
 import { AudioSystem } from '../systems/AudioSystem';
 import { BattleEngine, type BattleAction } from '../systems/BattleEngine';
-import { isSmallScreen } from '../systems/Device';
 import { InputAdapter } from '../systems/InputAdapter';
 import {
   applyExperienceGain,
@@ -41,6 +40,7 @@ import {
   createPanel,
   createTinyIcon
 } from '../ui/UiTheme';
+import { getLayoutManager, type LayoutProfile } from '../ui/LayoutManager';
 
 type BattleOutcome = 'victory' | 'defeat' | 'capture' | 'escaped';
 
@@ -55,6 +55,8 @@ type BattleSceneData = {
 type BattleCommand = 'fight' | 'bag' | 'switch' | 'run';
 
 type HpBarUi = {
+  panel: Phaser.GameObjects.Rectangle;
+  track: Phaser.GameObjects.Rectangle;
   title: Phaser.GameObjects.Text;
   fill: Phaser.GameObjects.Rectangle;
   label: Phaser.GameObjects.Text;
@@ -62,6 +64,7 @@ type HpBarUi = {
   maxWidth: number;
   maxHp: number;
   displayedHp: number;
+  icon: Phaser.GameObjects.Rectangle;
 };
 
 type CommandButtonUi = {
@@ -124,16 +127,38 @@ type AbilityHookName = keyof Pick<
   'onEnter' | 'onHit' | 'onLowHP' | 'onFaint' | 'onTurnStart'
 >;
 
+type BattleLayout = {
+  enemySpriteX: number;
+  enemySpriteY: number;
+  playerSpriteX: number;
+  playerSpriteY: number;
+  enemyPanelX: number;
+  enemyPanelY: number;
+  enemyPanelWidth: number;
+  playerPanelX: number;
+  playerPanelY: number;
+  playerPanelWidth: number;
+  battlePanelX: number;
+  battlePanelY: number;
+  battlePanelWidth: number;
+  battlePanelHeight: number;
+  movePanelX: number;
+  movePanelY: number;
+  movePanelWidth: number;
+  movePanelCompactHeight: number;
+  movePanelExpandedHeight: number;
+  bagPanelX: number;
+  bagPanelY: number;
+  bagPanelWidth: number;
+  bagPanelHeight: number;
+};
+
 const BAG_ITEMS: Array<{ item: InventoryKey; label: string }> = [
   { item: 'coreSeal', label: 'Core Seal' },
   { item: 'potion', label: 'Potion' },
   { item: 'cleanse', label: 'Cleanse' }
 ];
 
-const PLAYER_SPRITE_X = 170;
-const PLAYER_SPRITE_Y = 218;
-const ENEMY_SPRITE_X = 430;
-const ENEMY_SPRITE_Y = 104;
 const FAST_MESSAGE_MIN_MS = 500;
 const FAST_MESSAGE_MAX_MS = 700;
 
@@ -151,7 +176,10 @@ export class BattleScene extends Phaser.Scene {
   private enemyHpUi!: HpBarUi;
   private playerSprite!: Phaser.GameObjects.Image;
   private enemySprite!: Phaser.GameObjects.Image;
+  private battleBackground?: Phaser.GameObjects.Graphics;
   private messageText!: Phaser.GameObjects.Text;
+  private battlePanel?: Phaser.GameObjects.Rectangle;
+  private backHint?: Phaser.GameObjects.Text;
   private commandButtons: CommandButtonUi[] = [];
   private selectedCommandIndex = 0;
   private moveSelectionOpen = false;
@@ -198,6 +226,8 @@ export class BattleScene extends Phaser.Scene {
   private bagKey!: Phaser.Input.Keyboard.Key;
   private shiftKey!: Phaser.Input.Keyboard.Key;
   private inputAdapter!: InputAdapter;
+  private layoutProfile: LayoutProfile = getLayoutManager().getLayoutProfile();
+  private layoutUnsubscribe: (() => void) | null = null;
 
   public constructor() {
     super(SCENE_KEYS.BATTLE);
@@ -230,12 +260,12 @@ export class BattleScene extends Phaser.Scene {
       this.rareEncounter = this.rareEncounter || isRareSpecies(this.enemyTeam[0].speciesId);
     }
 
+    this.layoutProfile = getLayoutManager().getLayoutProfile();
+    this.battlePanelTop = this.getBattleLayout().battlePanelY;
+
     this.rebuildEngineFromActive();
     this.drawBackground();
     this.inputAdapter = new InputAdapter(this);
-    if (this.inputAdapter.usesTouchControls() && isSmallScreen()) {
-      this.battlePanelTop = 208;
-    }
     this.createCombatSprites();
     this.createCombatPanels();
     this.createBattlePanel();
@@ -251,9 +281,17 @@ export class BattleScene extends Phaser.Scene {
     }
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.layoutUnsubscribe?.();
+      this.layoutUnsubscribe = null;
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
       this.registry.set('battleState', null);
       this.resetRuntimeState();
     });
+
+    this.layoutUnsubscribe = getLayoutManager().onResize((profile) => {
+      this.applyLayoutProfile(profile);
+    });
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
 
     this.publishBattleState();
   }
@@ -321,6 +359,229 @@ export class BattleScene extends Phaser.Scene {
     };
   }
 
+  private applyLayoutProfile(profile: LayoutProfile): void {
+    this.layoutProfile = profile;
+    this.battlePanelTop = this.getBattleLayout().battlePanelY;
+    this.drawBackground();
+
+    if (!this.playerSprite || !this.enemySprite || !this.messageText) {
+      return;
+    }
+
+    this.stopIdleBob('player', false);
+    this.stopIdleBob('enemy', false);
+    this.repositionCombatSprites();
+    this.rebuildCombatPanels();
+    this.rebuildBattlePanel();
+    this.resumeIdleBob('player');
+    this.resumeIdleBob('enemy');
+
+    if (this.moveSelectionOpen) {
+      this.openMoveSelection();
+    }
+
+    if (this.bagOpen) {
+      this.bagOpen = false;
+      this.openBag(this.bagReturnMode);
+    }
+
+    this.publishBattleState();
+  }
+
+  private handleScaleResize(): void {
+    this.applyLayoutProfile(this.layoutProfile);
+  }
+
+  private repositionCombatSprites(): void {
+    const layout = this.getBattleLayout();
+    this.playerSprite.setPosition(layout.playerSpriteX, layout.playerSpriteY);
+    this.enemySprite.setPosition(layout.enemySpriteX, layout.enemySpriteY);
+  }
+
+  private rebuildCombatPanels(): void {
+    const player = this.getActivePlayerCreature();
+    const enemy = this.getActiveEnemyCreature();
+    if (!player || !enemy) {
+      return;
+    }
+
+    if (this.playerHpUi) {
+      this.destroyCombatantPanel(this.playerHpUi);
+    }
+    if (this.enemyHpUi) {
+      this.destroyCombatantPanel(this.enemyHpUi);
+    }
+
+    const layout = this.getBattleLayout();
+    this.enemyHpUi = this.createCombatantPanel(
+      layout.enemyPanelX,
+      layout.enemyPanelY,
+      layout.enemyPanelWidth,
+      enemy
+    );
+    this.playerHpUi = this.createCombatantPanel(
+      layout.playerPanelX,
+      layout.playerPanelY,
+      layout.playerPanelWidth,
+      player
+    );
+  }
+
+  private rebuildBattlePanel(): void {
+    const currentMessage = this.messageText?.text ?? '';
+
+    this.destroyCommandButtons();
+    this.battlePanel?.destroy();
+    this.backHint?.destroy();
+    this.messageText?.destroy();
+
+    this.battlePanel = undefined;
+    this.backHint = undefined;
+
+    this.createBattlePanel();
+
+    if (currentMessage.length > 0) {
+      this.messageText.setText(currentMessage);
+    }
+  }
+
+  private destroyCombatantPanel(panel: HpBarUi): void {
+    panel.panel.destroy();
+    panel.track.destroy();
+    panel.fill.destroy();
+    panel.title.destroy();
+    panel.label.destroy();
+    panel.statusBadge.destroy();
+    panel.icon.destroy();
+  }
+
+  private getBattleLayout(): BattleLayout {
+    const safe = getLayoutManager().getSafeMargins();
+    const width = this.scale.width;
+    const height = this.scale.height;
+    const formFactor = this.layoutProfile.formFactor;
+
+    const isPortraitMobile = formFactor === 'mobile-portrait';
+    const isLandscapeMobile = formFactor === 'mobile-landscape';
+    const isTablet = formFactor === 'tablet';
+
+    const panelHeight = isPortraitMobile
+      ? Math.max(128, Math.round(height * 0.23))
+      : Math.max(126, Math.min(140, Math.round(height * 0.28)));
+
+    const panelBottomInset =
+      safe.bottom +
+      (isPortraitMobile
+        ? Math.round(safe.touchBottom * 1.2)
+        : isLandscapeMobile
+          ? Math.round(safe.touchBottom * 0.2)
+          : isTablet
+            ? Math.round(safe.touchBottom * 0.24)
+            : 8);
+
+    const battlePanelY = Math.max(0, height - panelHeight - Math.max(8, panelBottomInset));
+    let battlePanelX = 0;
+    let battlePanelWidth = width;
+
+    let enemySpriteX = 430;
+    let enemySpriteY = 104;
+    let playerSpriteX = 170;
+    let playerSpriteY = 218;
+    let enemyPanelX = 314;
+    let enemyPanelY = 24;
+    let playerPanelX = 24;
+    let playerPanelY = 174;
+    let panelWidth = 302;
+
+    if (isPortraitMobile) {
+      panelWidth = Math.max(260, width - 24);
+      enemySpriteX = Math.round(width * 0.5);
+      enemySpriteY = Math.max(58, Math.round(height * 0.2));
+      playerSpriteX = Math.round(width * 0.5);
+      playerSpriteY = Math.min(battlePanelY - 34, Math.round(height * 0.58));
+      enemyPanelX = Math.round((width - panelWidth) / 2);
+      enemyPanelY = Math.max(10, safe.top + 8);
+      playerPanelX = Math.round((width - panelWidth) / 2);
+      playerPanelY = Math.max(enemyPanelY + 82, battlePanelY - 84);
+    } else if (isLandscapeMobile) {
+      const sideInsetLeft = Math.round(safe.touchLeft * 0.96);
+      const sideInsetRight = Math.round(safe.touchRight * 0.96);
+      battlePanelX = Math.max(8, sideInsetLeft + 8);
+      const minBattleWidth = 240;
+      const maxSideInsetRight = Math.max(8, width - battlePanelX - minBattleWidth - 8);
+      const adjustedSideInsetRight = Phaser.Math.Clamp(sideInsetRight, 8, maxSideInsetRight);
+      battlePanelWidth = Math.max(220, width - battlePanelX - adjustedSideInsetRight - 8);
+
+      panelWidth = Math.max(220, Math.min(280, battlePanelWidth - 16));
+      enemySpriteX = battlePanelX + Math.round(battlePanelWidth * 0.74);
+      enemySpriteY = Math.round(height * 0.29);
+      playerSpriteX = battlePanelX + Math.round(battlePanelWidth * 0.26);
+      playerSpriteY = Math.min(battlePanelY - 34, Math.round(height * 0.62));
+      enemyPanelX = battlePanelX + Math.round((battlePanelWidth - panelWidth) / 2);
+      enemyPanelY = Math.max(10, safe.top + 8);
+      playerPanelX = enemyPanelX;
+      playerPanelY = Math.max(12, battlePanelY - 84);
+    } else if (isTablet) {
+      const tabletLandscape = this.layoutProfile.orientation === 'landscape';
+      const tabletLeftInset = tabletLandscape
+        ? Math.max(Math.round(width * 0.2), Math.round(safe.touchLeft * 1.24))
+        : Math.round(safe.touchLeft * 0.78);
+      const desiredTabletRightInset = tabletLandscape
+        ? Math.max(Math.round(width * 0.18), Math.round(safe.touchRight * 1.18))
+        : Math.round(safe.touchRight * 0.78);
+      battlePanelX = Math.max(8, tabletLeftInset + 8);
+      const minBattleWidth = tabletLandscape ? 250 : 260;
+      const maxTabletRightInset = Math.max(8, width - battlePanelX - minBattleWidth - 8);
+      const adjustedTabletRightInset = Phaser.Math.Clamp(
+        desiredTabletRightInset,
+        8,
+        maxTabletRightInset
+      );
+      battlePanelWidth = Math.max(230, width - battlePanelX - adjustedTabletRightInset - 8);
+
+      panelWidth = Math.max(220, Math.min(tabletLandscape ? 292 : 300, battlePanelWidth - 16));
+      enemySpriteX = battlePanelX + Math.round(battlePanelWidth * 0.74);
+      enemySpriteY = Math.round(height * 0.29);
+      playerSpriteX = battlePanelX + Math.round(battlePanelWidth * 0.26);
+      playerSpriteY = Math.min(battlePanelY - 34, Math.round(height * 0.62));
+      enemyPanelX = battlePanelX + battlePanelWidth - panelWidth - 8;
+      enemyPanelY = Math.max(12, safe.top + 8);
+      playerPanelX = battlePanelX + 8;
+      playerPanelY = Math.max(12, battlePanelY - 84);
+    }
+
+    const movePanelX = battlePanelX + 8;
+    const movePanelWidth = Math.max(220, battlePanelWidth - 16);
+    const bagPanelWidth = Math.max(188, Math.min(248, Math.round(movePanelWidth * 0.46)));
+    const bagPanelX = battlePanelX + battlePanelWidth - bagPanelWidth - 8;
+
+    return {
+      enemySpriteX,
+      enemySpriteY,
+      playerSpriteX,
+      playerSpriteY,
+      enemyPanelX,
+      enemyPanelY,
+      enemyPanelWidth: panelWidth,
+      playerPanelX,
+      playerPanelY,
+      playerPanelWidth: panelWidth,
+      battlePanelX,
+      battlePanelY,
+      battlePanelWidth,
+      battlePanelHeight: panelHeight,
+      movePanelX,
+      movePanelY: Math.max(12, battlePanelY - (isPortraitMobile ? 132 : 82)),
+      movePanelWidth,
+      movePanelCompactHeight: isPortraitMobile ? 104 : 56,
+      movePanelExpandedHeight: isPortraitMobile ? 146 : 108,
+      bagPanelX,
+      bagPanelY: Math.max(14, battlePanelY - 132),
+      bagPanelWidth,
+      bagPanelHeight: 118
+    };
+  }
+
   private createCombatSprites(): void {
     const player = this.getActivePlayerCreature();
     const enemy = this.getActiveEnemyCreature();
@@ -328,8 +589,13 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    const layout = this.getBattleLayout();
     this.enemySprite = this.add
-      .image(ENEMY_SPRITE_X, ENEMY_SPRITE_Y, ProcSpriteFactory.generateFront(this, enemy.speciesId))
+      .image(
+        layout.enemySpriteX,
+        layout.enemySpriteY,
+        ProcSpriteFactory.generateFront(this, enemy.speciesId)
+      )
       .setOrigin(0.5)
       .setScale(3)
       .setAlpha(0)
@@ -338,8 +604,8 @@ export class BattleScene extends Phaser.Scene {
 
     this.playerSprite = this.add
       .image(
-        PLAYER_SPRITE_X,
-        PLAYER_SPRITE_Y,
+        layout.playerSpriteX,
+        layout.playerSpriteY,
         ProcSpriteFactory.generateBack(this, player.speciesId)
       )
       .setOrigin(0.5)
@@ -355,46 +621,65 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
-    this.enemyHpUi = this.createCombatantPanel(314, 24, enemy);
-    this.playerHpUi = this.createCombatantPanel(24, 174, player);
+    const layout = this.getBattleLayout();
+    this.enemyHpUi = this.createCombatantPanel(
+      layout.enemyPanelX,
+      layout.enemyPanelY,
+      layout.enemyPanelWidth,
+      enemy
+    );
+    this.playerHpUi = this.createCombatantPanel(
+      layout.playerPanelX,
+      layout.playerPanelY,
+      layout.playerPanelWidth,
+      player
+    );
   }
 
   private createBattlePanel(): void {
+    const layout = this.getBattleLayout();
+    this.battlePanelTop = layout.battlePanelY;
+
     const panel = createPanel(this, {
-      x: 0,
-      y: this.battlePanelTop,
-      width: this.scale.width,
-      height: 134,
+      x: layout.battlePanelX,
+      y: layout.battlePanelY,
+      width: layout.battlePanelWidth,
+      height: layout.battlePanelHeight,
       fillColor: 0x08111f,
       fillAlpha: 0.97,
       strokeColor: 0x8cb6dc,
       strokeWidth: 2,
       depth: 40
     });
+    this.battlePanel = panel;
 
-    this.messageText = createBodyText(this, 16, panel.y + 8, '', {
-      size: 16,
+    const messageFontSize = this.layoutProfile.formFactor === 'mobile-portrait' ? 14 : 16;
+    this.messageText = createBodyText(this, panel.x + 12, panel.y + 8, '', {
+      size: messageFontSize,
       color: '#f6f8ff',
       depth: 41,
-      wordWrapWidth: this.scale.width - 32
+      wordWrapWidth: panel.width - 24
     });
-    createBackHint(this, 'Esc: Back', {
-      x: this.scale.width - 10,
-      y: this.scale.height - 8,
+    this.backHint = createBackHint(this, 'Esc: Back', {
+      x: panel.x + panel.width - 10,
+      y: panel.y + panel.height - 6,
       depth: 44
     });
 
-    this.createCommandButtons(panel.y + 54);
+    this.createCommandButtons(
+      panel.y + Math.max(42, panel.height - 80),
+      panel.x + 8,
+      panel.width - 16
+    );
     this.refreshCommandHighlights();
   }
 
-  private createCommandButtons(topY: number): void {
+  private createCommandButtons(topY: number, startX: number, panelContentWidth: number): void {
     this.destroyCommandButtons();
 
     const spacing = 8;
-    const buttonWidth = Math.floor((this.scale.width - 32 - spacing) / 2);
+    const buttonWidth = Math.max(92, Math.floor((Math.max(208, panelContentWidth) - spacing) / 2));
     const buttonHeight = 32;
-    const startX = 16;
 
     const commands: Array<{
       command: BattleCommand;
@@ -720,11 +1005,32 @@ export class BattleScene extends Phaser.Scene {
     this.moveSelectionOpen = true;
     this.selectedMoveIndex = 0;
 
+    const layout = this.getBattleLayout();
+    const moveIds = [...player.moves];
+    const totalOptions = moveIds.length + 1;
+    const compactLayout =
+      this.layoutProfile.formFactor === 'mobile-portrait' || this.scale.width < 560;
+    let columns = 4;
+    if (compactLayout) {
+      columns = totalOptions >= 5 ? 3 : 2;
+    } else if (totalOptions >= 5) {
+      columns = 3;
+    }
+    const rows = Math.max(1, Math.ceil(totalOptions / columns));
+    const spacing = 8;
+    const buttonHeight = rows > 1 ? 34 : 40;
+    const panelHeight = 16 + rows * buttonHeight + (rows - 1) * spacing;
+    const panelY = Math.max(12, this.battlePanelTop - panelHeight - 8);
+
     this.movePanel = this.add
-      .rectangle(12, 146, this.scale.width - 24, player.moves.length > 3 ? 108 : 56, 0x071321, 0.96)
+      .rectangle(layout.movePanelX, panelY, layout.movePanelWidth, panelHeight, 0x071321, 0.96)
       .setOrigin(0)
       .setStrokeStyle(2, 0x8fbbe0, 1)
       .setDepth(60);
+
+    const buttonWidth = Math.floor((this.movePanel.width - 16 - spacing * (columns - 1)) / columns);
+    const startX = this.movePanel.x + 8;
+    const startY = this.movePanel.y + 8;
 
     const createMoveButton = (
       moveId: MoveId,
@@ -780,68 +1086,25 @@ export class BattleScene extends Phaser.Scene {
       });
     };
 
-    const moveIds = [...player.moves];
-    const wideLayout = moveIds.length > 3;
-    if (wideLayout) {
-      const columns = 3;
-      const spacing = 8;
-      const buttonWidth = Math.floor(
-        (this.movePanel.width - 16 - spacing * (columns - 1)) / columns
-      );
-      const buttonHeight = 34;
-      const startX = this.movePanel.x + 8;
-      const startY = this.movePanel.y + 8;
+    moveIds.forEach((moveId, index) => {
+      const row = Math.floor(index / columns);
+      const col = index % columns;
+      const x = startX + col * (buttonWidth + spacing);
+      const y = startY + row * (buttonHeight + spacing);
+      createMoveButton(moveId, index, x, y, buttonWidth, buttonHeight, row, col);
+    });
 
-      moveIds.forEach((moveId, index) => {
-        const row = moveIds.length === 4 ? Math.floor(index / 2) : Math.floor(index / columns);
-        const col = moveIds.length === 4 ? index % 2 : index % columns;
-        const x = startX + col * (buttonWidth + spacing);
-        const y = startY + row * (buttonHeight + spacing);
-        createMoveButton(moveId, index, x, y, buttonWidth, buttonHeight, row, col);
-      });
-
-      this.moveBackRow = 1;
-      this.moveBackCol = 2;
-
-      const backX = startX + this.moveBackCol * (buttonWidth + spacing);
-      const backY = startY + this.moveBackRow * (buttonHeight + spacing);
-      this.moveBackButton = this.add
-        .rectangle(backX, backY, buttonWidth, buttonHeight, 0x1a2638, 1)
-        .setOrigin(0)
-        .setStrokeStyle(2, 0x5d7ea7, 1)
-        .setDepth(61)
-        .setInteractive({ useHandCursor: true });
-    } else {
-      const buttonWidth = 136;
-      const backWidth = 160;
-      const spacing = 8;
-      const startX = this.movePanel.x + 8;
-      const y = this.movePanel.y + 8;
-
-      moveIds.forEach((moveId, index) => {
-        createMoveButton(
-          moveId,
-          index,
-          startX + index * (buttonWidth + spacing),
-          y,
-          buttonWidth,
-          40,
-          0,
-          index
-        );
-      });
-
-      this.moveBackRow = 0;
-      this.moveBackCol = moveIds.length;
-
-      const backX = startX + moveIds.length * (buttonWidth + spacing);
-      this.moveBackButton = this.add
-        .rectangle(backX, y, backWidth, 40, 0x1a2638, 1)
-        .setOrigin(0)
-        .setStrokeStyle(2, 0x5d7ea7, 1)
-        .setDepth(61)
-        .setInteractive({ useHandCursor: true });
-    }
+    const backIndex = moveIds.length;
+    this.moveBackRow = Math.floor(backIndex / columns);
+    this.moveBackCol = backIndex % columns;
+    const backX = startX + this.moveBackCol * (buttonWidth + spacing);
+    const backY = startY + this.moveBackRow * (buttonHeight + spacing);
+    this.moveBackButton = this.add
+      .rectangle(backX, backY, buttonWidth, buttonHeight, 0x1a2638, 1)
+      .setOrigin(0)
+      .setStrokeStyle(2, 0x5d7ea7, 1)
+      .setDepth(61)
+      .setInteractive({ useHandCursor: true });
 
     this.moveBackText = this.add
       .text(this.moveBackButton.x + 8, this.moveBackButton.y + 8, 'Back', {
@@ -997,8 +1260,16 @@ export class BattleScene extends Phaser.Scene {
     this.selectedBagIndex = 0;
     this.destroyBagPanel();
 
+    const layout = this.getBattleLayout();
     this.bagPanel = this.add
-      .rectangle(420, 126, 208, 118, 0x071321, 0.96)
+      .rectangle(
+        layout.bagPanelX,
+        layout.bagPanelY,
+        layout.bagPanelWidth,
+        layout.bagPanelHeight,
+        0x071321,
+        0.96
+      )
       .setOrigin(0)
       .setStrokeStyle(2, 0x8fbbe0, 1)
       .setDepth(80);
@@ -1332,13 +1603,13 @@ export class BattleScene extends Phaser.Scene {
     this.selectedSwitchIndex = 0;
 
     const rowCount = this.gameState.party.length + (forced ? 0 : 1);
-    const rowHeight = 26;
+    const rowHeight = this.layoutProfile.formFactor === 'mobile-portrait' ? 24 : 26;
     const rowGap = 4;
     const headerHeight = 34;
     const panelHeight = headerHeight + rowCount * (rowHeight + rowGap) + 10;
-    const panelWidth = 520;
+    const panelWidth = Math.min(520, this.scale.width - 24);
     const panelX = (this.scale.width - panelWidth) / 2;
-    const panelY = Math.max(18, (this.scale.height - panelHeight) / 2);
+    const panelY = Math.max(10, (this.scale.height - panelHeight) / 2);
 
     this.switchPanel = this.add
       .rectangle(panelX, panelY, panelWidth, panelHeight, 0x06111f, 0.96)
@@ -2219,7 +2490,7 @@ export class BattleScene extends Phaser.Scene {
     const rowGap = 2;
     const headerHeight = 34;
     const panelHeight = headerHeight + optionCount * (rowHeight + rowGap) + 8;
-    const panelWidth = 312;
+    const panelWidth = Math.min(312, this.scale.width - 24);
     const panelX = (this.scale.width - panelWidth) / 2;
     const panelY = Math.max(16, this.battlePanelTop - panelHeight - 8);
 
@@ -2450,11 +2721,17 @@ export class BattleScene extends Phaser.Scene {
     });
   }
 
-  private createCombatantPanel(x: number, y: number, creature: CreatureInstance): HpBarUi {
-    createPanel(this, {
+  private createCombatantPanel(
+    x: number,
+    y: number,
+    width: number,
+    creature: CreatureInstance
+  ): HpBarUi {
+    const panelWidth = Math.max(236, width);
+    const panel = createPanel(this, {
       x,
       y,
-      width: 302,
+      width: panelWidth,
       height: 74,
       fillColor: 0x0a101b,
       fillAlpha: 0.94,
@@ -2474,13 +2751,13 @@ export class BattleScene extends Phaser.Scene {
         depth: 31
       }
     );
-    createTinyIcon(this, x + 6, y + 16, {
+    const icon = createTinyIcon(this, x + 6, y + 16, {
       color: 0x9fd0ff,
       size: 3,
       depth: 31
     });
 
-    const statusBadge = createBodyText(this, x + 234, y + 8, '', {
+    const statusBadge = createBodyText(this, x + panelWidth - 66, y + 8, '', {
       size: 10,
       color: '#d8edff',
       depth: 31
@@ -2489,14 +2766,16 @@ export class BattleScene extends Phaser.Scene {
       .setBackgroundColor('#243a54')
       .setVisible(false);
 
+    const hpTrackWidth = Math.max(122, panelWidth - 92);
+
     const track = this.add
-      .rectangle(x + 10, y + 36, 210, 11, 0x1f2d3a, 1)
+      .rectangle(x + 10, y + 36, hpTrackWidth, 11, 0x1f2d3a, 1)
       .setOrigin(0)
       .setDepth(31);
     track.setStrokeStyle(1, 0x415d7d, 1);
 
     const fill = this.add
-      .rectangle(x + 10, y + 36, 210, 11, 0x52cd75, 1)
+      .rectangle(x + 10, y + 36, hpTrackWidth, 11, 0x52cd75, 1)
       .setOrigin(0)
       .setDepth(32);
 
@@ -2509,13 +2788,16 @@ export class BattleScene extends Phaser.Scene {
       .setDepth(31);
 
     const hpUi: HpBarUi = {
+      panel,
+      track,
       title,
       fill,
       label: hpText,
       statusBadge,
-      maxWidth: 210,
+      maxWidth: hpTrackWidth,
       maxHp: creature.stats.hp,
-      displayedHp: creature.currentHp
+      displayedHp: creature.currentHp,
+      icon
     };
 
     this.applyHpVisual(hpUi, creature.currentHp);
@@ -2545,9 +2827,10 @@ export class BattleScene extends Phaser.Scene {
 
     this.stopIdleBob('player');
     this.tweens.killTweensOf(this.playerSprite);
+    const layout = this.getBattleLayout();
     this.playerSprite
       .setTexture(ProcSpriteFactory.generateBack(this, player.speciesId))
-      .setPosition(PLAYER_SPRITE_X, PLAYER_SPRITE_Y)
+      .setPosition(layout.playerSpriteX, layout.playerSpriteY)
       .setScale(3)
       .setVisible(true)
       .setAlpha(1);
@@ -2564,9 +2847,10 @@ export class BattleScene extends Phaser.Scene {
 
     this.stopIdleBob('enemy');
     this.tweens.killTweensOf(this.enemySprite);
+    const layout = this.getBattleLayout();
     this.enemySprite
       .setTexture(ProcSpriteFactory.generateFront(this, enemy.speciesId))
-      .setPosition(ENEMY_SPRITE_X, ENEMY_SPRITE_Y)
+      .setPosition(layout.enemySpriteX, layout.enemySpriteY)
       .setScale(3)
       .setVisible(true)
       .setAlpha(1);
@@ -2666,9 +2950,10 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private getSpriteBasePosition(target: 'player' | 'enemy'): { x: number; y: number } {
+    const layout = this.getBattleLayout();
     return target === 'player'
-      ? { x: PLAYER_SPRITE_X, y: PLAYER_SPRITE_Y }
-      : { x: ENEMY_SPRITE_X, y: ENEMY_SPRITE_Y };
+      ? { x: layout.playerSpriteX, y: layout.playerSpriteY }
+      : { x: layout.enemySpriteX, y: layout.enemySpriteY };
   }
 
   private getRoleSprite(target: 'player' | 'enemy'): Phaser.GameObjects.Image {
@@ -3161,13 +3446,19 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private drawBackground(): void {
-    const graphics = this.add.graphics();
+    if (!this.battleBackground) {
+      this.battleBackground = this.add.graphics().setDepth(0);
+    }
+
+    const layout = this.getBattleLayout();
+    const graphics = this.battleBackground;
+    graphics.clear();
     graphics.fillGradientStyle(0x16223a, 0x16223a, 0x0b101d, 0x0b101d, 1);
     graphics.fillRect(0, 0, this.scale.width, this.scale.height);
     graphics.fillStyle(0x21304b, 0.45);
-    graphics.fillEllipse(430, 134, 166, 52);
+    graphics.fillEllipse(layout.enemySpriteX, layout.enemySpriteY + 30, 166, 52);
     graphics.fillStyle(0x1a2b42, 0.45);
-    graphics.fillEllipse(170, 246, 196, 64);
+    graphics.fillEllipse(layout.playerSpriteX, layout.playerSpriteY + 28, 196, 64);
   }
 
   private createRandomEnemy(): CreatureInstance {
@@ -3243,6 +3534,18 @@ export class BattleScene extends Phaser.Scene {
     this.destroySwitchPanel();
     this.destroyMoveReplacePanel();
     this.destroyCommandButtons();
+    if (this.playerHpUi) {
+      this.destroyCombatantPanel(this.playerHpUi);
+    }
+    if (this.enemyHpUi) {
+      this.destroyCombatantPanel(this.enemyHpUi);
+    }
+    this.battlePanel?.destroy();
+    this.backHint?.destroy();
+    this.battlePanel = undefined;
+    this.backHint = undefined;
+    this.battleBackground?.destroy();
+    this.battleBackground = undefined;
 
     this.commandButtons = [];
     this.selectedCommandIndex = 0;

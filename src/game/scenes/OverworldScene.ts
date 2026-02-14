@@ -32,6 +32,7 @@ import {
   type InventoryKey
 } from '../state/GameState';
 import { TOWN_WARP_MAPS } from '../world/WorldMaps';
+import { getLayoutManager, type LayoutProfile } from '../ui/LayoutManager';
 import { createBackHint, createBodyText, createHeadingText, createPanel } from '../ui/UiTheme';
 
 type InputDirection = {
@@ -424,6 +425,7 @@ export class OverworldScene extends Phaser.Scene {
   private devWarpIndex = 0;
   private devWarpPanel?: Phaser.GameObjects.Rectangle;
   private devWarpText?: Phaser.GameObjects.Text;
+  private layoutUnsubscribe: (() => void) | null = null;
 
   public constructor() {
     super(SCENE_KEYS.OVERWORLD);
@@ -458,9 +460,7 @@ export class OverworldScene extends Phaser.Scene {
     this.ensurePickupTextures();
 
     const camera = this.cameras.main;
-    camera.setZoom(1);
     camera.setRoundPixels(true);
-    camera.setDeadzone(64, 40);
     camera.startFollow(this.player, true, 0.25, 0.25);
 
     const startMapId = this.gameState.player.mapId;
@@ -470,9 +470,17 @@ export class OverworldScene extends Phaser.Scene {
       facing: this.facing
     });
 
+    this.layoutUnsubscribe = getLayoutManager().onResize((profile) => {
+      this.applyResponsiveLayout(profile);
+    });
+    this.scale.on(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
+
     this.events.on(Phaser.Scenes.Events.RESUME, this.handleSceneResume, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off(Phaser.Scenes.Events.RESUME, this.handleSceneResume, this);
+      this.layoutUnsubscribe?.();
+      this.layoutUnsubscribe = null;
+      this.scale.off(Phaser.Scale.Events.RESIZE, this.handleScaleResize, this);
       this.closeMinimap();
     });
   }
@@ -577,6 +585,36 @@ export class OverworldScene extends Phaser.Scene {
     this.updateMinimapPlayerMarker();
 
     this.publishOverworldState();
+  }
+
+  private applyResponsiveLayout(profile: LayoutProfile): void {
+    const camera = this.cameras.main;
+
+    if (profile.formFactor === 'mobile-portrait') {
+      camera.setZoom(0.92);
+      camera.setDeadzone(50, 30);
+    } else if (profile.formFactor === 'mobile-landscape') {
+      camera.setZoom(1.08);
+      camera.setDeadzone(72, 46);
+    } else if (profile.formFactor === 'tablet') {
+      camera.setZoom(1.0);
+      camera.setDeadzone(70, 44);
+    } else {
+      camera.setZoom(1.0);
+      camera.setDeadzone(64, 40);
+    }
+
+    camera.centerOn(this.player.x + TILE_SIZE / 2, this.player.y + TILE_SIZE / 2);
+
+    if (this.minimapOpen) {
+      this.renderMinimap();
+    }
+
+    this.publishOverworldState();
+  }
+
+  private handleScaleResize(): void {
+    this.applyResponsiveLayout(getLayoutManager().getLayoutProfile());
   }
 
   private renderNpcs(): void {
@@ -1470,8 +1508,14 @@ export class OverworldScene extends Phaser.Scene {
     const mapPixelHeight = map.height * scale;
     const panelWidth = mapPixelWidth + 20;
     const panelHeight = mapPixelHeight + 34;
-    const panelX = this.scale.width - panelWidth - 8;
-    const panelY = 8;
+    const safeMargins = getLayoutManager().getSafeMargins();
+    const rightOffset = Math.max(
+      8,
+      safeMargins.right + 6 + Math.round(safeMargins.touchRight * 0.35)
+    );
+    const leftOffset = Math.max(8, safeMargins.left + 6);
+    const panelX = Math.max(leftOffset, this.scale.width - panelWidth - rightOffset);
+    const panelY = Math.max(8, safeMargins.top + 6);
 
     const panel = createPanel(this, {
       x: panelX,

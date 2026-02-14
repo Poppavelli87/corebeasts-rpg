@@ -571,3 +571,19 @@ Original prompt: Create a new folder "corebeasts-rpg" and build a working Phaser
     - MENU tap opens Party,
     - B tap closes Party back to Overworld,
     - no console errors.
+- Mobile layout benchmark completion pass:
+  - Added central responsive layout module `src/game/ui/LayoutManager.ts` and wired scene reflow hooks.
+  - Updated Phaser bootstrap (`src/main.ts`) to use `Phaser.Scale.RESIZE` with explicit viewport resize handling.
+  - Refactored touch controls (`src/game/ui/TouchControls.ts`) to use layout profile + safe margins and dynamic sizing per form factor/orientation.
+  - Refactored battle HUD/layout (`src/game/scenes/BattleScene.ts`) to anchor message/command UI to responsive battle panel bounds instead of full-screen width.
+  - Tuned landscape/tablet battle safe-insets and touch reservations to avoid control overlap.
+  - Updated overworld/party responsive hooks (`src/game/scenes/OverworldScene.ts`, `src/game/scenes/PartyScene.ts`) and CSS container sizing (`src/style.css`).
+  - Added README responsive layout profile notes.
+- Validation:
+  - Skill loop run: `web_game_playwright_client.js` against dev server (`output/web-game/state-0.json` + screenshot captured, no runtime errors surfaced).
+  - Manual viewport verification via Playwright screenshots:
+    - `output/layout-verify/battle-mobile-portrait.png`
+    - `output/layout-verify/battle-mobile-landscape.png`
+    - `output/layout-verify/battle-tablet-landscape.png`
+    - Confirmed battle UI no longer overlaps touch controls in landscape/tablet and remains readable in portrait.
+  - `npm run build` passes.

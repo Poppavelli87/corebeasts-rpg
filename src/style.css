@@ -24,10 +24,12 @@ body {
 
 #app,
 #game-root {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  display: block;
   touch-action: none;
   overscroll-behavior: none;
   user-select: none;
@@ -35,6 +37,7 @@ body {
 }
 
 canvas {
+  display: block;
   border: 2px solid #2d4c73;
   image-rendering: pixelated;
   image-rendering: crisp-edges;

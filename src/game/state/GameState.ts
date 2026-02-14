@@ -37,6 +37,8 @@ export type CreatureInstance = {
 
 export type GameState = {
   difficulty: DifficultyMode;
+  challengeMode: boolean;
+  newGamePlus: boolean;
   player: {
     name: string;
     mapId: MapId;
@@ -50,6 +52,8 @@ export type GameState = {
   meta: {
     saveVersion: number;
     playTimeSeconds: number;
+    runSeed: number;
+    ngPlusCycle: number;
   };
 };
 
@@ -85,6 +89,9 @@ const isMapId = (value: unknown): value is MapId =>
 
 const isDifficultyMode = (value: unknown): value is DifficultyMode =>
   value === 'easy' || value === 'normal' || value === 'hard';
+
+const generateRunSeed = (): number =>
+  Math.floor((Date.now() ^ Math.floor(Math.random() * 0x7fffffff)) >>> 0);
 
 const clampPlayerToMap = (mapId: MapId, x: number, y: number): { x: number; y: number } => {
   const map = MAP_DEFINITIONS[mapId];
@@ -246,12 +253,20 @@ const normalizeStorage = (input: unknown): CreatureInstance[] => {
 export const createNewGameState = (
   playerName = 'Player',
   includeStarter = true,
-  difficulty: DifficultyMode = 'normal'
+  difficulty: DifficultyMode = 'normal',
+  options: {
+    challengeMode?: boolean;
+    newGamePlus?: boolean;
+    ngPlusCycle?: number;
+    runSeed?: number;
+  } = {}
 ): GameState => {
   const spawn = MAP_DEFINITIONS.starterTown.spawn;
 
   return {
     difficulty,
+    challengeMode: options.challengeMode ?? false,
+    newGamePlus: options.newGamePlus ?? false,
     player: {
       name: playerName,
       mapId: 'starterTown',
@@ -264,13 +279,17 @@ export const createNewGameState = (
     storyFlags: {},
     meta: {
       saveVersion: GAME_SAVE_VERSION,
-      playTimeSeconds: 0
+      playTimeSeconds: 0,
+      runSeed: options.runSeed ?? generateRunSeed(),
+      ngPlusCycle: Math.max(0, Math.floor(options.ngPlusCycle ?? (options.newGamePlus ? 1 : 0)))
     }
   };
 };
 
 export const cloneGameState = (state: GameState): GameState => ({
   difficulty: state.difficulty,
+  challengeMode: state.challengeMode,
+  newGamePlus: state.newGamePlus,
   player: { ...state.player },
   party: state.party.map((creature) => cloneCreatureInstance(creature)),
   storage: state.storage.map((creature) => cloneCreatureInstance(creature)),
@@ -296,6 +315,8 @@ export const normalizeGameState = (input: unknown): GameState => {
 
   const normalized: GameState = {
     difficulty: isDifficultyMode(input.difficulty) ? input.difficulty : 'normal',
+    challengeMode: input.challengeMode === true,
+    newGamePlus: input.newGamePlus === true,
     player: {
       name:
         typeof playerInput.name === 'string' && playerInput.name.trim().length > 0
@@ -314,9 +335,19 @@ export const normalizeGameState = (input: unknown): GameState => {
       playTimeSeconds: toNonNegativeInt(
         isRecord(input.meta) ? input.meta.playTimeSeconds : undefined,
         0
-      )
+      ),
+      runSeed: toNonNegativeInt(isRecord(input.meta) ? input.meta.runSeed : undefined, 0),
+      ngPlusCycle: toNonNegativeInt(isRecord(input.meta) ? input.meta.ngPlusCycle : undefined, 0)
     }
   };
+
+  if (normalized.meta.runSeed <= 0) {
+    normalized.meta.runSeed = generateRunSeed();
+  }
+
+  if (normalized.newGamePlus && normalized.meta.ngPlusCycle <= 0) {
+    normalized.meta.ngPlusCycle = 1;
+  }
 
   return normalized;
 };

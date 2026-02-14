@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import type { DialogEntry } from './TileMap';
+import { getDialogCharsPerSecond, getUserSettings } from './UserSettings';
+import { UI_THEME } from '../ui/UiTheme';
 
 export class DialogSystem {
   private readonly scene: Phaser.Scene;
@@ -22,6 +24,14 @@ export class DialogSystem {
 
   private onComplete: (() => void) | undefined;
 
+  private revealEvent: Phaser.Time.TimerEvent | null = null;
+
+  private fullLineText = '';
+
+  private revealedChars = 0;
+
+  private revealing = false;
+
   public constructor(scene: Phaser.Scene) {
     this.scene = scene;
 
@@ -42,7 +52,7 @@ export class DialogSystem {
 
     this.speakerLabel = this.scene.add
       .text(0, 0, '', {
-        fontFamily: '"Courier New", monospace',
+        fontFamily: UI_THEME.fontFamily,
         fontSize: '14px',
         color: '#f7e089'
       })
@@ -52,7 +62,7 @@ export class DialogSystem {
 
     this.bodyLabel = this.scene.add
       .text(0, 0, '', {
-        fontFamily: '"Courier New", monospace',
+        fontFamily: UI_THEME.fontFamily,
         fontSize: '16px',
         color: '#f5f9ff'
       })
@@ -62,7 +72,7 @@ export class DialogSystem {
 
     this.hintLabel = this.scene.add
       .text(0, 0, 'Enter: Next', {
-        fontFamily: '"Courier New", monospace',
+        fontFamily: UI_THEME.fontFamily,
         fontSize: '12px',
         color: '#8bb0d0'
       })
@@ -97,6 +107,11 @@ export class DialogSystem {
       return;
     }
 
+    if (this.revealing) {
+      this.finishReveal();
+      return;
+    }
+
     this.index += 1;
     if (this.index >= this.queue.length) {
       this.close();
@@ -115,6 +130,7 @@ export class DialogSystem {
       return;
     }
 
+    this.stopReveal();
     this.active = false;
     this.queue = [];
     this.index = 0;
@@ -128,7 +144,10 @@ export class DialogSystem {
   private renderCurrentLine(): void {
     const entry = this.queue[this.index];
     this.speakerLabel.setText(entry.speaker.toUpperCase());
-    this.bodyLabel.setText(entry.text);
+    this.fullLineText = entry.text;
+    this.revealedChars = 0;
+    this.bodyLabel.setText('');
+    this.startReveal();
   }
 
   private layout(): void {
@@ -151,5 +170,46 @@ export class DialogSystem {
     this.speakerLabel.setVisible(visible);
     this.bodyLabel.setVisible(visible);
     this.hintLabel.setVisible(visible);
+  }
+
+  private startReveal(): void {
+    this.stopReveal();
+    const text = this.fullLineText;
+    if (!text.length) {
+      this.bodyLabel.setText('');
+      this.revealing = false;
+      this.hintLabel.setText('Enter: Next');
+      return;
+    }
+
+    const charsPerSecond = getDialogCharsPerSecond(getUserSettings().textSpeed);
+    const delayMs = Math.max(10, Math.floor(1000 / charsPerSecond));
+
+    this.revealing = true;
+    this.hintLabel.setText('Enter: Skip');
+    this.revealEvent = this.scene.time.addEvent({
+      delay: delayMs,
+      loop: true,
+      callback: () => {
+        this.revealedChars += 1;
+        if (this.revealedChars >= text.length) {
+          this.finishReveal();
+          return;
+        }
+        this.bodyLabel.setText(text.slice(0, this.revealedChars));
+      }
+    });
+  }
+
+  private finishReveal(): void {
+    this.stopReveal();
+    this.revealing = false;
+    this.bodyLabel.setText(this.fullLineText);
+    this.hintLabel.setText('Enter: Next');
+  }
+
+  private stopReveal(): void {
+    this.revealEvent?.remove(false);
+    this.revealEvent = null;
   }
 }

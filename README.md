@@ -1,137 +1,209 @@
-# corebeasts-rpg
+# Corebeasts RPG
 
-Minimal Phaser 3 + TypeScript + Vite starter with retro RPG title flow.
+Corebeasts RPG is a retro-inspired monster-battling RPG built with Phaser 3, TypeScript, and Vite. It includes overworld exploration, trainer and wild battles, creature progression/evolution, save/load, party/storage management, and a full campaign skeleton through credits.
 
-## Requirements
+## Quick Start (Local)
 
-- Node.js 20+ (or current LTS)
+Requirements:
+
+- Node.js 20+
 - npm 10+
 
-## Run
+Install + run:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local Vite URL shown in the terminal.
-
-## Build
+Build production web bundle:
 
 ```bash
 npm run build
 ```
 
-## Lint and Format
+## How To Play (Controls)
+
+Core:
+
+- `Arrow Keys` / `WASD`: Move selection and character
+- `Enter`: Confirm / interact / advance dialog
+- `Esc`: Back / close menu
+
+Overworld:
+
+- `Enter`: Talk/interact (facing target)
+- `Esc`: Pause menu (Party / Inventory / Save / Options)
+- `M`: Toggle minimap
+- `` ` ``: Toggle debug overlay
+
+Battle:
+
+- `Arrow Keys` / `WASD`: Navigate commands and moves
+- `Enter`: Confirm action
+- `Fight`, `Bag`, `Switch`, `Run` (wild only)
+- `B`: Open Bag quickly
+- `Shift` (hold): Fast-forward battle text
+
+## Build + Distribution
+
+### Web Build (shareable zip)
+
+One command to create a friend-shareable web zip:
 
 ```bash
-npm run lint
-npm run format
+npm run build:share
 ```
 
-Fix commands:
+Output:
+
+- `release/corebeasts-web-v<version>.zip`
+
+If you already built once and only need to zip:
 
 ```bash
-npm run lint:fix
-npm run format:fix
+npm run zip:web
 ```
 
-## Controls
+### Desktop Build (Electron)
 
-- `Up` / `Down`: move title menu selection
-- `Enter`: confirm selection
-- `Esc`: go back in title screen dialogs
-- `Settings -> Difficulty` (title): set New Game mode to `Easy` / `Normal` / `Hard`
-- `Enter` (intro): advance dialog
-- `Type` + `Backspace` + `Enter` (intro naming): edit and confirm player name
-- `Left` / `Right` or `A` / `D` (starter select): choose starter
-- `Enter` (starter select): confirm starter
-- `Arrow keys` / `WASD`: move in overworld (tile-to-tile)
-- `Enter` (overworld): interact with NPC in facing direction / advance dialog
-- `Esc` (overworld): open pause menu (Party / Inventory / Save / Options)
-- `Options -> Difficulty` (pause menu): change difficulty with confirmation
-- `Enter` while facing `Bindery Terminal` (heal houses): open Party/Storage manager
-- `Left` / `Right` (terminal): switch Party/Storage tabs
-- `Enter` (terminal Party tab): move selected party creature to Storage (cannot leave party empty)
-- `Enter` (terminal Storage tab): open actions (Move to Party / Release / Cancel)
-- `Arrow keys` / `WASD` (battle): navigate command and move menus
-- `Enter` (battle): confirm command / move
-- `Fight` (battle): open move list
-- `Bag` or `B` (battle): open Bag (Core Seal / Potion / Cleanse)
-- `Switch` (battle): open party switch panel
-- `Run` (wild battle): escape the encounter
-- `Back` (trainer battle): disabled retreat command
-- `Esc` (battle move list): return to command menu
-- `Up` / `Down` + `Enter` (learn prompt): pick move to replace
-- `Esc` (learn prompt): cancel learning
-- `P` (DEV only, overworld): open warp panel to jump between towns/maps for testing
-- `Enter` / `Esc` (credits): return to title
-- `` ` ``: toggle debug overlay (FPS + active scene)
+Run desktop in development:
 
-## Save/Load + Party Notes
+```bash
+npm run dev:desktop
+```
 
-- Save data uses browser `localStorage` key `corebeasts_save_v1`.
-- `Continue` is enabled only when save data exists.
-- Autosave triggers:
-  - after battle resolution
-  - after item use
-  - after entering/exiting buildings
-  - after party/storage move or release in Bindery Terminal
-  - when closing Bindery Terminal
-- New game starts with one starter creature in party and a starter inventory.
-- Battles award XP; level-ups can teach moves and trigger evolution.
-- Save data includes selected difficulty (`easy` / `normal` / `hard`) and preserves it across refresh + Continue.
-- Creature instances persist a `bond` value used by friendship-evolution checks.
-- Move capacity scales with level:
-  - Lv1-9: 3 moves
-  - Lv10-24: 4 moves
-  - Lv25+: 5 moves
+Build Windows desktop artifacts:
 
-## Project Notes
+```bash
+npm run build:desktop
+```
 
-- Pixel-art defaults are enabled (`pixelArt: true`, `antialias: false`, CSS `image-rendering: pixelated`).
-- Includes a small WebAudio `AudioSystem` stub that generates short beeps (no asset files required).
-- Random encounters trigger on grass tiles (10% chance per successful step in grass).
-- Campaign flow starts with `IntroScene` and `StarterSelectionScene` before entering the overworld.
-- Campaign skeleton now includes 8 Trial checkpoints and final credits flow.
-- Difficulty effects:
-  - `Easy`: trainer levels reduced, late-trial teams slightly smaller, reduced enemy status-application rate.
-  - `Normal`: baseline campaign tuning.
-  - `Hard`: trainer levels increased, mid/late trials gain extra team slots (cap 5), one tactical enemy switch per trainer battle when hard-countered.
-- Trainer AI (trainer battles only) is score-based instead of random and prefers KO lines, type advantage, and useful status timing.
-- World map chain:
-  - `starterTown -> route1 -> verdantisTown -> northPass -> route2 -> brinegateTown -> cave1 -> stonecrossTown -> route3 -> coilhavenTown -> marsh1 -> hollowmereTown -> route4 -> obsidianForgeTown -> bridge1 -> skydriftSpiresTown -> choirfallRuins -> finalTower`
-- Trial progression flags unlock gates in sequence:
-  - `trial1Complete` unlocks Verdantis north gate and Route 2 path.
-  - `trial2Complete` unlocks Cave 1 access.
-  - `trial3Complete` unlocks Route 3.
-  - `trial4Complete` unlocks Marsh 1.
-  - `trial5Complete` unlocks Route 4.
-  - `trial6Complete` unlocks Bridge 1 / Skydrift path.
-  - `trial7Complete` unlocks Choirfall + Final Tower access.
-  - `trial8Complete` (Final Tower boss) triggers `CreditsScene`.
-- Gate blockers are visible objects and show a seal message until required flags are set.
-- Encounter data is map-driven (per-map level range + weighted encounter table), including ultra-rare pools (`~1-2%`) and story-flag-gated rare entries.
-- Creature roster expanded to 54 species (18 three-stage evolution lines).
-- Species definitions include `rareFlag`; rare wild encounters use a special intro line and subtle battle-sprite tint.
-- Evolution rules support:
-  - level threshold
-  - friendship threshold (`bond`)
-  - use-item evolution
-  - region-restricted evolution
-  - timed/story-flag conditions
-- Postgame:
-  - Entering credits sets `postgameUnlocked = true`.
-  - Optional boss trainers appear in `cave1`, `marsh1`, and `finalTower` after postgame unlock.
-  - Defeating each optional boss unlocks additional regional rare encounter entries.
-- Creature visuals are generated procedurally at runtime (battle front/back + overworld icon) via `ProcSpriteFactory` with deterministic seeds per creature id.
-- Scenes:
-  - `BootScene`
-  - `TitleScene`
-  - `IntroScene`
-  - `StarterSelectionScene`
-  - `OverworldScene`
-  - `BattleScene`
-  - `PartyScene`
-  - `CreditsScene`
-  - `DebugOverlayScene`
+Build Windows portable + installer explicitly:
+
+```bash
+npm run build:desktop:win
+```
+
+Additional targets:
+
+```bash
+npm run build:desktop:mac
+npm run build:desktop:linux
+```
+
+Desktop outputs:
+
+- `release/desktop/` (portable and installer artifacts based on target)
+
+Note: Cross-platform packaging is toolchain/OS dependent. In practice:
+
+- Build Windows targets on Windows.
+- Build macOS targets on macOS.
+- Build Linux targets on Linux.
+
+### GitHub Pages Build
+
+Build for repository subpath hosting:
+
+```bash
+npm run build:pages
+```
+
+The repository includes `.github/workflows/pages.yml` to deploy on push to `main`.
+
+## Sharing With Friends
+
+### Option A: Web
+
+1. Run `npm run build:share`.
+2. Send `release/corebeasts-web-v<version>.zip`.
+3. Receiver unzips and serves the folder with a local static server.
+
+Example local server commands:
+
+```bash
+npx serve dist
+```
+
+or
+
+```bash
+python -m http.server 4173 --directory dist
+```
+
+Then open the printed local URL in a browser.
+
+### Option B: Desktop
+
+1. Build with `npm run build:desktop`.
+2. Zip/send files from `release/desktop/`.
+3. Receiver runs the generated app/exe.
+
+## Troubleshooting
+
+- Windows SmartScreen warning:
+  - Click `More info` then `Run anyway` for unsigned local builds.
+- Missing VC++ runtime on Windows:
+  - Install Microsoft Visual C++ Redistributable (x64) if app launch fails with missing runtime DLL errors.
+- Blank page after opening `dist/index.html` directly:
+  - Use a local web server (`npx serve dist`), not direct `file://` browsing.
+- Desktop build fails on macOS/Linux target from Windows:
+  - Use `build:desktop:mac` on macOS and `build:desktop:linux` on Linux or run per-OS CI.
+
+## Known Limitations
+
+- Desktop binaries are unsigned by default (warnings are expected on first launch).
+- Cross-compiling desktop artifacts across all OSes from one machine is not guaranteed.
+- Content is benchmark-driven and still under active balancing/polish.
+
+## Repo Hygiene + Release Utilities
+
+- License: `MIT` (`LICENSE`)
+- Contribution guide: `CONTRIBUTING.md`
+- Conduct: `CODE_OF_CONDUCT.md`
+- Security reporting: `SECURITY.md`
+- Changelog: `CHANGELOG.md`
+- Release notes generator:
+
+```bash
+npm run release:notes
+```
+
+Output:
+
+- `release/release-notes-v<version>.md`
+
+## Exact Commands (Publish Flow)
+
+Initialize Git and first commit (if starting from a local folder without `.git`):
+
+```bash
+git init
+git add .
+git commit -m "chore: initial corebeasts-rpg release"
+```
+
+Create GitHub repo and push (GitHub CLI):
+
+```bash
+gh repo create corebeasts-rpg --public --source . --remote origin --push
+```
+
+Build web zip:
+
+```bash
+npm run build:share
+```
+
+Build desktop package:
+
+```bash
+npm run build:desktop
+```
+
+Deploy to GitHub Pages:
+
+1. Push to `main`.
+2. In GitHub repo settings, set Pages source to `GitHub Actions`.
+3. Workflow deploys automatically via `.github/workflows/pages.yml`.

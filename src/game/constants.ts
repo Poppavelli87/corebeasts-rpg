@@ -14,6 +14,13 @@ export const SCENE_KEYS = {
   DEBUG: 'DebugOverlayScene'
 } as const;
 
-export const MENU_OPTIONS = ['New Game', 'Continue', 'Settings', 'Quit'] as const;
+export const MENU_OPTIONS = [
+  'New Game',
+  'Continue',
+  'New Game+',
+  'Settings',
+  'Help',
+  'Quit'
+] as const;
 
 export type MenuOption = (typeof MENU_OPTIONS)[number];

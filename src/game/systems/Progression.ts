@@ -12,11 +12,12 @@ import {
   type UseItemEvolutionRule
 } from '../data/creatures';
 import type { MoveId } from '../data/moves';
-import type { CreatureInstance } from '../state/GameState';
+import type { CreatureInstance, DifficultyMode } from '../state/GameState';
 
 const XP_BASE = 25;
 const XP_GROWTH = 1.18;
 const MAX_LEVEL = 50;
+const CHALLENGE_TRIAL_CAPS = [9, 14, 18, 22, 26, 30, 35, 44] as const;
 
 export const getMaxMovesForLevel = (level: number): number => {
   const normalizedLevel = Math.max(1, Math.floor(level));
@@ -63,6 +64,26 @@ export type EvolutionContext = {
 type ExperienceGainOptions = {
   mapId?: string;
   storyFlags?: Record<string, boolean>;
+  levelCap?: number;
+};
+
+export const getChallengeLevelCap = (
+  storyFlags: Record<string, boolean>,
+  difficulty: DifficultyMode,
+  newGamePlus: boolean
+): number => {
+  const nextTrialIndex = CHALLENGE_TRIAL_CAPS.findIndex(
+    (_cap, index) => !storyFlags[`trial${index + 1}Complete`]
+  );
+
+  if (nextTrialIndex < 0) {
+    return MAX_LEVEL;
+  }
+
+  const base = CHALLENGE_TRIAL_CAPS[nextTrialIndex];
+  const difficultyOffset = difficulty === 'easy' ? -1 : difficulty === 'hard' ? 1 : 0;
+  const ngPlusOffset = newGamePlus ? 3 : 0;
+  return Phaser.Math.Clamp(base + difficultyOffset + ngPlusOffset, 5, MAX_LEVEL);
 };
 
 export const xpToNextLevel = (level: number): number => {
@@ -223,9 +244,13 @@ export const applyExperienceGain = (
 
   const levelUps: LevelUpProgress[] = [];
   let safety = 0;
+  const effectiveLevelCap = Math.max(
+    1,
+    Math.min(MAX_LEVEL, Math.floor(options.levelCap ?? MAX_LEVEL))
+  );
 
   while (
-    creature.level < MAX_LEVEL &&
+    creature.level < effectiveLevelCap &&
     creature.xp >= xpToNextLevel(creature.level) &&
     safety < MAX_LEVEL * 2
   ) {

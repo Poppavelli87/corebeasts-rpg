@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { getCreatureDefinition, type CreatureId } from '../data/creatures';
+import { CREATURE_DEFINITIONS, getCreatureDefinition, type CreatureId } from '../data/creatures';
 import { SCENE_KEYS } from '../constants';
 import { AudioSystem } from '../systems/AudioSystem';
 import { DialogSystem } from '../systems/DialogSystem';
@@ -31,6 +31,7 @@ import {
   type InventoryKey
 } from '../state/GameState';
 import { TOWN_WARP_MAPS } from '../world/WorldMaps';
+import { createBackHint, createBodyText, createHeadingText, createPanel } from '../ui/UiTheme';
 
 type InputDirection = {
   direction: Direction;
@@ -97,6 +98,97 @@ type TrialRewardDefinition = {
 };
 
 const DEFAULT_ENCOUNTER_CHANCE = 0.1;
+const MAX_CREATURE_LEVEL = 50;
+
+type CreatureType = 'Ember' | 'Tide' | 'Bloom' | 'Volt' | 'Stone' | 'Shade';
+
+const hashSeed = (value: string): number => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const createSeededRng = (seed: number): (() => number) => {
+  let current = seed >>> 0;
+  return () => {
+    current += 0x6d2b79f5;
+    let t = current;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const getEvolutionThreshold = (speciesId: CreatureId): number | null => {
+  const evolution = getCreatureDefinition(speciesId).evolution;
+  if (!evolution) {
+    return null;
+  }
+
+  if ('atLevel' in evolution && typeof evolution.atLevel === 'number') {
+    return Math.max(1, Math.floor(evolution.atLevel));
+  }
+
+  if ('minLevel' in evolution && typeof evolution.minLevel === 'number') {
+    return Math.max(1, Math.floor(evolution.minLevel));
+  }
+
+  return 16;
+};
+
+const evolveSpeciesForTrainerLevel = (speciesId: CreatureId, level: number): CreatureId => {
+  let current = speciesId;
+
+  for (let safety = 0; safety < 4; safety += 1) {
+    const definition = getCreatureDefinition(current);
+    const evolution = definition.evolution;
+    if (!evolution) {
+      break;
+    }
+
+    const threshold = getEvolutionThreshold(current);
+    if (threshold === null || level < threshold) {
+      break;
+    }
+
+    const nextId = evolution.toSpeciesId as CreatureId;
+    if (!(nextId in CREATURE_DEFINITIONS) || nextId === current) {
+      break;
+    }
+
+    current = nextId;
+  }
+
+  return current;
+};
+
+const EVOLUTION_TARGET_IDS = new Set<CreatureId>(
+  Object.values(CREATURE_DEFINITIONS)
+    .map((definition) => definition.evolution?.toSpeciesId)
+    .filter(
+      (value): value is CreatureId => typeof value === 'string' && value in CREATURE_DEFINITIONS
+    )
+);
+
+const ROOT_SPECIES_BY_TYPE: Record<CreatureType, CreatureId[]> = {
+  Ember: [],
+  Tide: [],
+  Bloom: [],
+  Volt: [],
+  Stone: [],
+  Shade: []
+};
+
+(Object.keys(CREATURE_DEFINITIONS) as CreatureId[]).forEach((speciesId) => {
+  if (EVOLUTION_TARGET_IDS.has(speciesId)) {
+    return;
+  }
+  const type = getCreatureDefinition(speciesId).type as CreatureType;
+  ROOT_SPECIES_BY_TYPE[type].push(speciesId);
+});
 
 const TRAINER_TEAM_DEFINITIONS: Record<string, 'weakStarter' | TrainerTeamEntry[]> = {
   route1_scout_pella: [
@@ -319,6 +411,13 @@ export class OverworldScene extends Phaser.Scene {
   private moveKeys!: Record<'w' | 'a' | 's' | 'd', Phaser.Input.Keyboard.Key>;
   private enterKey!: Phaser.Input.Keyboard.Key;
   private escKey!: Phaser.Input.Keyboard.Key;
+  private minimapKey!: Phaser.Input.Keyboard.Key;
+  private minimapOpen = false;
+  private minimapLayer?: Phaser.GameObjects.Container;
+  private minimapPlayerDot?: Phaser.GameObjects.Rectangle;
+  private minimapScale = 3;
+  private minimapOriginX = 0;
+  private minimapOriginY = 0;
   private warpKey?: Phaser.Input.Keyboard.Key;
   private devWarpOpen = false;
   private devWarpIndex = 0;
@@ -331,6 +430,7 @@ export class OverworldScene extends Phaser.Scene {
 
   public create(): void {
     this.audio = new AudioSystem(this);
+    this.audio.playMusic('overworld');
     this.dialogSystem = new DialogSystem(this);
     this.tileMap = new TileMap(this, TILE_SIZE);
     this.gameState = getActiveGameState();
@@ -353,6 +453,7 @@ export class OverworldScene extends Phaser.Scene {
     };
     this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.minimapKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.M);
 
     if (import.meta.env.DEV) {
       this.warpKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.P);
@@ -376,6 +477,7 @@ export class OverworldScene extends Phaser.Scene {
     this.events.on(Phaser.Scenes.Events.RESUME, this.handleSceneResume, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.events.off(Phaser.Scenes.Events.RESUME, this.handleSceneResume, this);
+      this.closeMinimap();
     });
   }
 
@@ -385,6 +487,12 @@ export class OverworldScene extends Phaser.Scene {
   }
 
   private handleUpdateInput(): void {
+    if (Phaser.Input.Keyboard.JustDown(this.minimapKey)) {
+      this.toggleMinimap();
+      this.publishOverworldState();
+      return;
+    }
+
     if (import.meta.env.DEV && this.warpKey && Phaser.Input.Keyboard.JustDown(this.warpKey)) {
       if (!this.dialogSystem.isActive() && !this.isTransitioning && !this.isMoving) {
         this.toggleDevWarpPanel();
@@ -462,6 +570,12 @@ export class OverworldScene extends Phaser.Scene {
     if (this.currentMap.healOnEnter) {
       healParty(this.gameState);
     }
+
+    if (this.minimapOpen) {
+      this.renderMinimap();
+    }
+
+    this.updateMinimapPlayerMarker();
 
     this.publishOverworldState();
   }
@@ -706,8 +820,31 @@ export class OverworldScene extends Phaser.Scene {
     const ultraRareTable = (encounterConfig?.ultraRareTable ?? []).filter(
       (entry) => !entry.requiredFlag || hasStoryFlag(this.gameState, entry.requiredFlag)
     );
-    const ultraRareRate = Phaser.Math.Clamp(encounterConfig?.ultraRareRate ?? 0.015, 0.01, 0.02);
+    const challengeWildLevelBoost = this.gameState.challengeMode
+      ? this.gameState.difficulty === 'hard'
+        ? 2
+        : 1
+      : 0;
+    const ultraRareRate = Phaser.Math.Clamp(
+      (encounterConfig?.ultraRareRate ?? 0.015) + (this.gameState.newGamePlus ? 0.004 : 0),
+      0.01,
+      0.03
+    );
+    const ngPlusEarlyRareRate = this.gameState.newGamePlus ? 0.01 : 0;
+    const ngPlusEarlyRarePool = this.gameState.newGamePlus
+      ? [...new Set((encounterConfig?.ultraRareTable ?? []).map((entry) => entry.speciesId))]
+      : [];
     const levelRange = encounterConfig?.levelRange ?? { min: 2, max: 4 };
+    const effectiveLevelMin = Phaser.Math.Clamp(
+      Math.floor(levelRange.min + challengeWildLevelBoost),
+      1,
+      MAX_CREATURE_LEVEL
+    );
+    const effectiveLevelMax = Phaser.Math.Clamp(
+      Math.floor(levelRange.max + challengeWildLevelBoost),
+      effectiveLevelMin,
+      MAX_CREATURE_LEVEL
+    );
     const pickEncounterSpecies = (entries: typeof table): CreatureId | null => {
       if (entries.length === 0) {
         return null;
@@ -729,7 +866,14 @@ export class OverworldScene extends Phaser.Scene {
       table[table.length - 1]?.speciesId ?? this.gameState.party[0]?.speciesId ?? 'embercub';
     let rareEncounter = false;
 
-    if (ultraRareTable.length > 0 && Math.random() < ultraRareRate) {
+    if (ngPlusEarlyRarePool.length > 0 && Math.random() < ngPlusEarlyRareRate) {
+      const rarePoolPick =
+        ngPlusEarlyRarePool[Math.floor(Math.random() * ngPlusEarlyRarePool.length)] ?? null;
+      if (rarePoolPick && rarePoolPick in CREATURE_DEFINITIONS) {
+        selectedId = rarePoolPick;
+        rareEncounter = true;
+      }
+    } else if (ultraRareTable.length > 0 && Math.random() < ultraRareRate) {
       const ultraRarePick = pickEncounterSpecies(ultraRareTable);
       if (ultraRarePick) {
         selectedId = ultraRarePick;
@@ -742,7 +886,7 @@ export class OverworldScene extends Phaser.Scene {
       }
     }
 
-    const level = Phaser.Math.Between(levelRange.min, levelRange.max);
+    const level = Phaser.Math.Between(effectiveLevelMin, effectiveLevelMax);
     rareEncounter = rareEncounter || getCreatureDefinition(selectedId).rareFlag === true;
     return {
       enemy: createCreatureInstance(selectedId, level),
@@ -926,6 +1070,8 @@ export class OverworldScene extends Phaser.Scene {
 
     const difficulty = this.gameState.difficulty;
     const levelDelta = difficulty === 'easy' ? -2 : difficulty === 'hard' ? 2 : 0;
+    const ngPlusLevelBonus = this.gameState.newGamePlus ? 3 : 0;
+    let adjustedEntries: TrainerTeamEntry[] = [];
 
     if (template === 'weakStarter') {
       const leadType = getCreatureDefinition(this.gameState.party[0]?.speciesId ?? 'embercub').type;
@@ -940,14 +1086,20 @@ export class OverworldScene extends Phaser.Scene {
         supportSpecies = 'sparkit';
       }
 
-      return [weakSpecies, supportSpecies].map((speciesId) =>
-        createCreatureInstance(speciesId, Math.max(2, Phaser.Math.Between(7, 8) + levelDelta))
-      );
+      adjustedEntries = [weakSpecies, supportSpecies].map((speciesId) => ({
+        speciesId,
+        level: Phaser.Math.Between(7, 8)
+      }));
+    } else {
+      adjustedEntries = template.map((entry) => ({
+        speciesId: entry.speciesId,
+        level: entry.level
+      }));
     }
 
-    let adjustedEntries = template.map((entry) => ({
+    adjustedEntries = adjustedEntries.map((entry) => ({
       speciesId: entry.speciesId,
-      level: Math.max(2, entry.level + levelDelta)
+      level: Phaser.Math.Clamp(entry.level + levelDelta + ngPlusLevelBonus, 2, MAX_CREATURE_LEVEL)
     }));
 
     const trialOrder = TRIAL_TEAM_ORDER[trainerId] ?? null;
@@ -979,9 +1131,85 @@ export class OverworldScene extends Phaser.Scene {
       }
     }
 
+    if (this.gameState.newGamePlus) {
+      adjustedEntries = this.randomizeTrainerEntries(trainerId, this.currentMapId, adjustedEntries);
+    }
+
     return adjustedEntries
       .slice(0, 5)
       .map((entry) => createCreatureInstance(entry.speciesId, entry.level));
+  }
+
+  private randomizeTrainerEntries(
+    trainerId: string,
+    mapId: MapId,
+    entries: TrainerTeamEntry[]
+  ): TrainerTeamEntry[] {
+    if (entries.length <= 0) {
+      return [];
+    }
+
+    const rng = this.createTrainerSeededRng(trainerId, mapId);
+    const specializationTypes = [
+      ...new Set(
+        entries.map((entry) => getCreatureDefinition(entry.speciesId).type as CreatureType)
+      )
+    ];
+    const usedSpecies = new Set<CreatureId>();
+
+    return entries.map((entry) => {
+      const speciesId = this.pickRandomTrainerSpecies(
+        specializationTypes,
+        entry.level,
+        usedSpecies,
+        rng,
+        entry.speciesId
+      );
+      usedSpecies.add(speciesId);
+      return {
+        speciesId,
+        level: entry.level
+      };
+    });
+  }
+
+  private createTrainerSeededRng(trainerId: string, mapId: MapId): () => number {
+    const seedInput = `${this.gameState.meta.runSeed}:${this.gameState.meta.ngPlusCycle}:${mapId}:${trainerId}`;
+    return createSeededRng(hashSeed(seedInput));
+  }
+
+  private pickRandomTrainerSpecies(
+    specializationTypes: CreatureType[],
+    level: number,
+    usedSpecies: Set<CreatureId>,
+    rng: () => number,
+    fallbackSpecies: CreatureId
+  ): CreatureId {
+    const specializedPool = this.buildTrainerSpeciesPool(specializationTypes, level).filter(
+      (speciesId) => !usedSpecies.has(speciesId)
+    );
+    if (specializedPool.length > 0) {
+      return specializedPool[Math.floor(rng() * specializedPool.length)] ?? fallbackSpecies;
+    }
+
+    const globalPool = this.buildTrainerSpeciesPool(
+      Object.keys(ROOT_SPECIES_BY_TYPE) as CreatureType[],
+      level
+    ).filter((speciesId) => !usedSpecies.has(speciesId));
+    if (globalPool.length > 0) {
+      return globalPool[Math.floor(rng() * globalPool.length)] ?? fallbackSpecies;
+    }
+
+    const evolvedFallback = evolveSpeciesForTrainerLevel(fallbackSpecies, level);
+    return evolvedFallback;
+  }
+
+  private buildTrainerSpeciesPool(types: CreatureType[], level: number): CreatureId[] {
+    const roots = [...new Set(types.flatMap((type) => ROOT_SPECIES_BY_TYPE[type] ?? []))];
+    const speciesPool = roots.map((rootSpeciesId) =>
+      evolveSpeciesForTrainerLevel(rootSpeciesId, level)
+    );
+    return [...new Set(speciesPool)];
   }
 
   private transitionToMapLink(transition: MapTransition): void {
@@ -1209,6 +1437,145 @@ export class OverworldScene extends Phaser.Scene {
     this.devWarpText = undefined;
   }
 
+  private toggleMinimap(): void {
+    if (this.minimapOpen) {
+      this.closeMinimap();
+      return;
+    }
+
+    this.minimapOpen = true;
+    this.renderMinimap();
+    this.updateMinimapPlayerMarker();
+  }
+
+  private closeMinimap(): void {
+    this.minimapOpen = false;
+    this.minimapLayer?.destroy(true);
+    this.minimapLayer = undefined;
+    this.minimapPlayerDot = undefined;
+  }
+
+  private renderMinimap(): void {
+    if (!this.minimapOpen) {
+      return;
+    }
+
+    this.minimapLayer?.destroy(true);
+    this.minimapLayer = this.add.container(0, 0).setDepth(4600);
+
+    const map = this.currentMap;
+    const maxMapWidth = 112;
+    const maxMapHeight = 84;
+    const scale = Math.max(
+      2,
+      Math.floor(
+        Math.min(maxMapWidth / Math.max(1, map.width), maxMapHeight / Math.max(1, map.height))
+      )
+    );
+
+    this.minimapScale = scale;
+
+    const mapPixelWidth = map.width * scale;
+    const mapPixelHeight = map.height * scale;
+    const panelWidth = mapPixelWidth + 20;
+    const panelHeight = mapPixelHeight + 34;
+    const panelX = this.scale.width - panelWidth - 8;
+    const panelY = 8;
+
+    const panel = createPanel(this, {
+      x: panelX,
+      y: panelY,
+      width: panelWidth,
+      height: panelHeight,
+      fillColor: 0x061122,
+      fillAlpha: 0.9,
+      strokeColor: 0x7fb2dc,
+      strokeWidth: 2,
+      depth: 4601,
+      container: this.minimapLayer
+    });
+
+    createHeadingText(this, panel.x + 8, panel.y + 5, `Map: ${this.currentMapId}`, {
+      size: 10,
+      color: '#a9d5fb',
+      depth: 4602,
+      container: this.minimapLayer
+    });
+
+    this.minimapOriginX = panel.x + 10;
+    this.minimapOriginY = panel.y + 18;
+
+    const graphics = this.add.graphics().setDepth(4602).setScrollFactor(0);
+    this.minimapLayer.add(graphics);
+
+    const tileColor = (tile: ReturnType<TileMap['getTileType']>): number => {
+      if (tile === 'wall') {
+        return 0x59606d;
+      }
+      if (tile === 'water') {
+        return 0x3369a7;
+      }
+      if (tile === 'floor' || tile === 'door') {
+        return 0xae9c73;
+      }
+      return 0x467f4a;
+    };
+
+    for (let y = 0; y < map.height; y += 1) {
+      for (let x = 0; x < map.width; x += 1) {
+        const tile = map.tiles[y]?.[x] ?? 'grass';
+        graphics.fillStyle(tileColor(tile), 1);
+        graphics.fillRect(
+          this.minimapOriginX + x * scale,
+          this.minimapOriginY + y * scale,
+          scale,
+          scale
+        );
+      }
+    }
+
+    map.exits.forEach((exit) => {
+      graphics.fillStyle(0x8ad7ff, 1);
+      graphics.fillRect(
+        this.minimapOriginX + exit.x * scale,
+        this.minimapOriginY + exit.y * scale,
+        scale,
+        scale
+      );
+    });
+
+    this.minimapPlayerDot = this.add
+      .rectangle(0, 0, Math.max(2, scale), Math.max(2, scale), 0xffe67a, 1)
+      .setOrigin(0.5)
+      .setDepth(4603)
+      .setScrollFactor(0);
+
+    this.minimapLayer.add(this.minimapPlayerDot);
+    createBodyText(this, panel.x + 8, panel.y + panel.height - 13, 'M: Toggle', {
+      size: 10,
+      color: '#90b8d6',
+      depth: 4602,
+      container: this.minimapLayer
+    });
+    createBackHint(this, 'Esc: Menu', {
+      x: panel.x + panel.width - 6,
+      y: panel.y + panel.height - 3,
+      depth: 4602,
+      container: this.minimapLayer
+    });
+  }
+
+  private updateMinimapPlayerMarker(): void {
+    if (!this.minimapOpen || !this.minimapPlayerDot) {
+      return;
+    }
+
+    this.minimapPlayerDot.setPosition(
+      this.minimapOriginX + this.playerTile.x * this.minimapScale + this.minimapScale / 2,
+      this.minimapOriginY + this.playerTile.y * this.minimapScale + this.minimapScale / 2
+    );
+  }
+
   private renderDevWarpPanel(): void {
     if (!this.devWarpText) {
       return;
@@ -1258,6 +1625,8 @@ export class OverworldScene extends Phaser.Scene {
   }
 
   public publishOverworldState(): void {
+    this.updateMinimapPlayerMarker();
+
     const lead = this.gameState.party[0];
     const leadDefinition = lead ? getCreatureDefinition(lead.speciesId) : null;
 
@@ -1270,6 +1639,8 @@ export class OverworldScene extends Phaser.Scene {
 
     this.registry.set('gameState', {
       difficulty: this.gameState.difficulty,
+      challengeMode: this.gameState.challengeMode,
+      newGamePlus: this.gameState.newGamePlus,
       player: { ...this.gameState.player },
       party: this.gameState.party.map((creature) => ({
         speciesId: creature.speciesId,
@@ -1301,6 +1672,8 @@ export class OverworldScene extends Phaser.Scene {
       encounterEnabled: this.currentMap.encounter?.enabled ?? false,
       encounterChance: this.currentMap.encounter?.chance ?? DEFAULT_ENCOUNTER_CHANCE,
       difficulty: this.gameState.difficulty,
+      challengeMode: this.gameState.challengeMode,
+      newGamePlus: this.gameState.newGamePlus,
       completedTrials,
       activeTrainerId: this.activeTrainerEncounter?.trainerId ?? null,
       leadCreature: lead
@@ -1333,6 +1706,7 @@ export class OverworldScene extends Phaser.Scene {
         x: pickup.x,
         y: pickup.y
       })),
+      minimapOpen: this.minimapOpen,
       devWarpOpen: this.devWarpOpen
     });
   }

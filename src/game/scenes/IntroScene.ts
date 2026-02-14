@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { SCENE_KEYS } from '../constants';
 import { getActiveGameState } from '../state/GameState';
 import { AudioSystem } from '../systems/AudioSystem';
+import { getDialogCharsPerSecond, getUserSettings } from '../systems/UserSettings';
+import { UI_THEME } from '../ui/UiTheme';
 
 type IntroLine = {
   speaker: string;
@@ -65,6 +67,14 @@ export class IntroScene extends Phaser.Scene {
 
   private enterKey!: Phaser.Input.Keyboard.Key;
 
+  private revealEvent: Phaser.Time.TimerEvent | null = null;
+
+  private fullLineText = '';
+
+  private revealIndex = 0;
+
+  private revealing = false;
+
   private keydownHandler = (event: KeyboardEvent): void => {
     if (this.phase !== 'naming') {
       return;
@@ -99,6 +109,7 @@ export class IntroScene extends Phaser.Scene {
 
   public create(): void {
     this.audio = new AudioSystem(this);
+    this.audio.playMusic('title');
     const { width, height } = this.scale;
 
     this.add.rectangle(0, 0, width, height, 0x040912, 1).setOrigin(0);
@@ -109,7 +120,7 @@ export class IntroScene extends Phaser.Scene {
 
     this.add
       .text(width / 2, 40, 'CORE ARCHIVE', {
-        fontFamily: '"Courier New", monospace',
+        fontFamily: UI_THEME.fontFamily,
         fontSize: '30px',
         color: '#f4d97a',
         stroke: '#2a1b00',
@@ -119,20 +130,20 @@ export class IntroScene extends Phaser.Scene {
 
     this.add
       .text(width / 2, 76, 'Prologue', {
-        fontFamily: '"Courier New", monospace',
+        fontFamily: UI_THEME.fontFamily,
         fontSize: '18px',
         color: '#9ecbea'
       })
       .setOrigin(0.5);
 
     this.speakerText = this.add.text(16, height - 116, '', {
-      fontFamily: '"Courier New", monospace',
+      fontFamily: UI_THEME.fontFamily,
       fontSize: '16px',
       color: '#f3e194'
     });
 
     this.lineText = this.add.text(16, height - 92, '', {
-      fontFamily: '"Courier New", monospace',
+      fontFamily: UI_THEME.fontFamily,
       fontSize: '18px',
       color: '#f5fbff',
       wordWrap: {
@@ -141,7 +152,7 @@ export class IntroScene extends Phaser.Scene {
     });
 
     this.hintText = this.add.text(width - 14, height - 14, 'Enter: Next', {
-      fontFamily: '"Courier New", monospace',
+      fontFamily: UI_THEME.fontFamily,
       fontSize: '13px',
       color: '#9fc7e4'
     });
@@ -154,11 +165,17 @@ export class IntroScene extends Phaser.Scene {
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.input.keyboard?.off('keydown', this.keydownHandler);
+      this.stopReveal();
     });
   }
 
   public update(): void {
     if (!Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+      return;
+    }
+
+    if (this.revealing) {
+      this.finishReveal();
       return;
     }
 
@@ -184,6 +201,7 @@ export class IntroScene extends Phaser.Scene {
   }
 
   private beginNamingPhase(): void {
+    this.stopReveal();
     this.phase = 'naming';
     this.speakerText.setText('Name Entry');
     this.refreshNamingPrompt();
@@ -229,6 +247,48 @@ export class IntroScene extends Phaser.Scene {
 
   private showLine(line: IntroLine): void {
     this.speakerText.setText(line.speaker.toUpperCase());
-    this.lineText.setText(line.text);
+    this.fullLineText = line.text;
+    this.revealIndex = 0;
+    this.lineText.setText('');
+    this.startReveal();
+  }
+
+  private startReveal(): void {
+    this.stopReveal();
+    if (!this.fullLineText.length) {
+      this.lineText.setText('');
+      this.hintText.setText('Enter: Next');
+      this.revealing = false;
+      return;
+    }
+
+    this.revealing = true;
+    this.hintText.setText('Enter: Skip');
+    const charsPerSecond = getDialogCharsPerSecond(getUserSettings().textSpeed);
+    const delay = Math.max(10, Math.floor(1000 / charsPerSecond));
+    this.revealEvent = this.time.addEvent({
+      delay,
+      loop: true,
+      callback: () => {
+        this.revealIndex += 1;
+        if (this.revealIndex >= this.fullLineText.length) {
+          this.finishReveal();
+          return;
+        }
+        this.lineText.setText(this.fullLineText.slice(0, this.revealIndex));
+      }
+    });
+  }
+
+  private finishReveal(): void {
+    this.stopReveal();
+    this.revealing = false;
+    this.lineText.setText(this.fullLineText);
+    this.hintText.setText(this.phase === 'naming' ? 'Type letters, Enter: Confirm' : 'Enter: Next');
+  }
+
+  private stopReveal(): void {
+    this.revealEvent?.remove(false);
+    this.revealEvent = null;
   }
 }

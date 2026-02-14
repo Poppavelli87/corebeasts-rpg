@@ -64,7 +64,7 @@ window.render_game_to_text = () => {
     coordinateSystem: 'origin: top-left (0,0), +x: right, +y: down',
     activeScene,
     activeScenes: scenes,
-    titleMenu: MENU_OPTIONS,
+    titleMenu: game.registry.get('titleMenuOptions') ?? MENU_OPTIONS,
     overworldState: game.registry.get('overworldState') ?? null,
     battleState: game.registry.get('battleState') ?? null,
     gameState: game.registry.get('gameState') ?? null

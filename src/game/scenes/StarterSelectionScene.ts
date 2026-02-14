@@ -10,10 +10,17 @@ import {
 } from '../state/GameState';
 import { MAP_DEFINITIONS } from '../systems/TileMap';
 import { AudioSystem } from '../systems/AudioSystem';
+import { UI_THEME, createBackHint, createHeadingText, createPanel } from '../ui/UiTheme';
 
 type StarterOption = {
   id: CreatureId;
   typeLabel: string;
+};
+
+type NgPlusCarryPayload = {
+  speciesId: CreatureId;
+  nickname?: string;
+  moves?: unknown;
 };
 
 type StarterUi = {
@@ -44,32 +51,44 @@ export class StarterSelectionScene extends Phaser.Scene {
 
   private enterKey!: Phaser.Input.Keyboard.Key;
 
+  private escKey!: Phaser.Input.Keyboard.Key;
+
   public constructor() {
     super(SCENE_KEYS.STARTER_SELECTION);
   }
 
   public create(): void {
     this.audio = new AudioSystem(this);
+    this.audio.playMusic('title');
 
     const { width, height } = this.scale;
     this.add.rectangle(0, 0, width, height, 0x030813, 1).setOrigin(0);
-    this.add
-      .text(width / 2, 34, 'Choose Your Starter', {
-        fontFamily: '"Courier New", monospace',
-        fontSize: '30px',
-        color: '#f1da83',
-        stroke: '#2a1d02',
-        strokeThickness: 4
-      })
-      .setOrigin(0.5);
+    createPanel(this, {
+      x: 10,
+      y: 10,
+      width: width - 20,
+      height: height - 20,
+      fillColor: 0x071426,
+      fillAlpha: 0.62,
+      strokeColor: 0x33557d,
+      strokeWidth: 2
+    });
+
+    createHeadingText(this, width / 2, 34, 'Choose Your Starter', {
+      size: 30,
+      color: '#f1da83',
+      originX: 0.5,
+      originY: 0.5
+    });
 
     this.add
       .text(width / 2, 62, 'Left / Right: Select   Enter: Confirm', {
-        fontFamily: '"Courier New", monospace',
+        fontFamily: UI_THEME.fontFamily,
         fontSize: '14px',
         color: '#95bddb'
       })
       .setOrigin(0.5);
+    createBackHint(this, 'Esc: Back');
 
     const cardWidth = 182;
     const cardHeight = 230;
@@ -134,6 +153,7 @@ export class StarterSelectionScene extends Phaser.Scene {
       d: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.D)
     };
     this.enterKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
+    this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
 
     this.refreshSelection();
   }
@@ -149,15 +169,21 @@ export class StarterSelectionScene extends Phaser.Scene {
     if (leftPressed) {
       this.selectedIndex =
         (this.selectedIndex - 1 + STARTER_OPTIONS.length) % STARTER_OPTIONS.length;
-      this.audio.beep({ frequency: 760, durationMs: 45 });
+      this.audio.playMenuMove();
       this.refreshSelection();
       return;
     }
 
     if (rightPressed) {
       this.selectedIndex = (this.selectedIndex + 1) % STARTER_OPTIONS.length;
-      this.audio.beep({ frequency: 760, durationMs: 45 });
+      this.audio.playMenuMove();
       this.refreshSelection();
+      return;
+    }
+
+    if (Phaser.Input.Keyboard.JustDown(this.escKey)) {
+      this.audio.playMenuBack();
+      this.scene.start(SCENE_KEYS.INTRO);
       return;
     }
 
@@ -183,7 +209,7 @@ export class StarterSelectionScene extends Phaser.Scene {
       return;
     }
 
-    this.audio.beep({ frequency: 920, durationMs: 80 });
+    this.audio.playMenuConfirm();
 
     const gameState = getActiveGameState();
     gameState.party = [createCreatureInstance(selected.id, 5)];
@@ -195,6 +221,20 @@ export class StarterSelectionScene extends Phaser.Scene {
     gameState.inventory.trialSigil = 0;
 
     markStoryFlag(gameState, 'starterChosen');
+    const carryOver = this.registry.get('ngPlusCarryOverCreature') as NgPlusCarryPayload | null;
+    if (carryOver && typeof carryOver.speciesId === 'string') {
+      const carryCreature = createCreatureInstance(carryOver.speciesId, 5, {
+        nickname: carryOver.nickname,
+        moves: carryOver.moves
+      });
+      if (gameState.party.length < 6) {
+        gameState.party.push(carryCreature);
+      } else {
+        gameState.storage.push(carryCreature);
+      }
+      markStoryFlag(gameState, 'ngPlusCarryOverClaimed');
+    }
+    this.registry.set('ngPlusCarryOverCreature', null);
 
     const spawn = MAP_DEFINITIONS.starterTown.spawn;
     movePlayerTo(gameState, 'starterTown', spawn.x, spawn.y);

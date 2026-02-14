@@ -3,6 +3,7 @@ import { SCENE_KEYS } from '../constants';
 import { getCreatureDefinition } from '../data/creatures';
 import { getMoveDefinition } from '../data/moves';
 import { applyItemEvolution, xpToNextLevel } from '../systems/Progression';
+import { AudioSystem } from '../systems/AudioSystem';
 import {
   clearCreatureStatus,
   type DifficultyMode,
@@ -17,7 +18,21 @@ import {
   type InventoryKey
 } from '../state/GameState';
 import { SaveSystem } from '../systems/SaveSystem';
+import {
+  getUserSettings,
+  setUserSettings,
+  type TextSpeed,
+  type UserSettings
+} from '../systems/UserSettings';
 import { ProcSpriteFactory } from '../systems/ProcSpriteFactory';
+import {
+  UI_THEME,
+  createBackHint,
+  createBodyText,
+  createHeadingText,
+  createPanel,
+  createTinyIcon
+} from '../ui/UiTheme';
 
 type ViewMode =
   | 'root'
@@ -43,8 +58,10 @@ type StorageActionOption = 'Move to Party' | 'Release' | 'Cancel';
 
 const ROOT_OPTIONS: RootOption[] = ['Party', 'Inventory', 'Save', 'Options'];
 const DIFFICULTY_OPTIONS: DifficultyMode[] = ['easy', 'normal', 'hard'];
+const TEXT_SPEED_OPTIONS: TextSpeed[] = ['slow', 'normal', 'fast'];
 const STORAGE_ACTION_OPTIONS: StorageActionOption[] = ['Move to Party', 'Release', 'Cancel'];
 const STORAGE_TABS: StorageTab[] = ['party', 'storage'];
+const OPTIONS_ROW_COUNT = 9;
 const INVENTORY_DISPLAY_OPTIONS: InventoryKey[] = [
   'coreSeal',
   'potion',
@@ -55,6 +72,10 @@ const INVENTORY_DISPLAY_OPTIONS: InventoryKey[] = [
 const STORAGE_PAGE_SIZE = 6;
 
 export class PartyScene extends Phaser.Scene {
+  private audio!: AudioSystem;
+
+  private userSettings!: UserSettings;
+
   private gameState!: GameState;
 
   private mode: ViewMode = 'root';
@@ -83,6 +104,16 @@ export class PartyScene extends Phaser.Scene {
 
   private pendingDifficulty: DifficultyMode = 'normal';
 
+  private pendingChallengeMode = false;
+
+  private pendingTextSpeed: TextSpeed = 'normal';
+
+  private pendingMusicEnabled = true;
+
+  private pendingMusicVolume = 0.5;
+
+  private pendingSfxVolume = 0.5;
+
   private optionsConfirmIndex = 1;
 
   private messageText = '';
@@ -99,17 +130,30 @@ export class PartyScene extends Phaser.Scene {
 
   private escKey!: Phaser.Input.Keyboard.Key;
 
+  private storageSelectionByTab: Record<StorageTab, number> = {
+    party: 0,
+    storage: 0
+  };
+
   public constructor() {
     super(SCENE_KEYS.PARTY);
   }
 
   public create(data?: PartySceneLaunchData): void {
+    this.audio = new AudioSystem(this);
+    this.userSettings = getUserSettings();
     this.gameState = getActiveGameState();
     this.pendingDifficulty = this.gameState.difficulty;
+    this.pendingChallengeMode = this.gameState.challengeMode;
+    this.pendingTextSpeed = this.userSettings.textSpeed;
+    this.pendingMusicEnabled = this.userSettings.musicEnabled;
+    this.pendingMusicVolume = this.userSettings.musicVolume;
+    this.pendingSfxVolume = this.userSettings.sfxVolume;
     this.launchedFromTerminal = data?.source === 'terminal';
     this.mode = this.launchedFromTerminal ? 'storageManager' : 'root';
     this.storageTab = 'party';
     this.storageSelectionIndex = 0;
+    this.storageSelectionByTab = { party: 0, storage: 0 };
     this.storageActionIndex = 0;
     this.storageActionTargetIndex = 0;
     this.storageReleaseConfirmIndex = 0;
@@ -131,6 +175,7 @@ export class PartyScene extends Phaser.Scene {
 
     if (this.mode === 'message') {
       if (Phaser.Input.Keyboard.JustDown(this.enterKey)) {
+        this.audio.playMenuConfirm();
         this.mode = this.messageReturnMode;
         this.renderView();
       }
@@ -148,8 +193,8 @@ export class PartyScene extends Phaser.Scene {
     if (this.mode === 'options') {
       const leftPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.left!);
       const rightPressed = Phaser.Input.Keyboard.JustDown(this.cursorKeys.right!);
-      if (this.optionsIndex === 0 && (leftPressed || rightPressed)) {
-        this.shiftPendingDifficulty(leftPressed ? -1 : 1);
+      if (leftPressed || rightPressed) {
+        this.handleOptionsHorizontalAdjust(leftPressed ? -1 : 1);
       }
     }
 
@@ -162,6 +207,7 @@ export class PartyScene extends Phaser.Scene {
           0,
           2
         );
+        this.audio.playMenuMove();
         this.renderView();
       }
     }
@@ -175,6 +221,7 @@ export class PartyScene extends Phaser.Scene {
           0,
           2
         );
+        this.audio.playMenuMove();
         this.renderView();
       }
     }
@@ -193,26 +240,32 @@ export class PartyScene extends Phaser.Scene {
   }
 
   private moveSelection(direction: number): void {
+    let didMove = false;
+
     if (this.mode === 'root') {
       this.rootIndex = Phaser.Math.Wrap(this.rootIndex + direction, 0, ROOT_OPTIONS.length);
+      didMove = true;
     } else if (this.mode === 'partyList') {
       this.partyIndex = Phaser.Math.Wrap(
         this.partyIndex + direction,
         0,
         this.gameState.party.length
       );
+      didMove = true;
     } else if (this.mode === 'inventoryList') {
       this.inventoryIndex = Phaser.Math.Wrap(
         this.inventoryIndex + direction,
         0,
         INVENTORY_DISPLAY_OPTIONS.length
       );
+      didMove = true;
     } else if (this.mode === 'inventoryTarget') {
       this.targetIndex = Phaser.Math.Wrap(
         this.targetIndex + direction,
         0,
         this.gameState.party.length
       );
+      didMove = true;
     } else if (this.mode === 'storageManager') {
       const entries = this.getStorageEntries(this.storageTab);
       if (entries.length > 0) {
@@ -221,6 +274,8 @@ export class PartyScene extends Phaser.Scene {
           0,
           entries.length
         );
+        this.storageSelectionByTab[this.storageTab] = this.storageSelectionIndex;
+        didMove = true;
       }
     } else if (this.mode === 'storageAction') {
       this.storageActionIndex = Phaser.Math.Wrap(
@@ -228,22 +283,31 @@ export class PartyScene extends Phaser.Scene {
         0,
         STORAGE_ACTION_OPTIONS.length
       );
+      didMove = true;
     } else if (this.mode === 'storageReleaseConfirm') {
       this.storageReleaseConfirmIndex = Phaser.Math.Wrap(
         this.storageReleaseConfirmIndex + direction,
         0,
         2
       );
+      didMove = true;
     } else if (this.mode === 'options') {
-      this.optionsIndex = Phaser.Math.Wrap(this.optionsIndex + direction, 0, 3);
+      this.optionsIndex = Phaser.Math.Wrap(this.optionsIndex + direction, 0, OPTIONS_ROW_COUNT);
+      didMove = true;
     } else if (this.mode === 'optionsConfirm') {
       this.optionsConfirmIndex = Phaser.Math.Wrap(this.optionsConfirmIndex + direction, 0, 2);
+      didMove = true;
     }
 
+    if (didMove) {
+      this.audio.playMenuMove();
+    }
     this.renderView();
   }
 
   private confirmSelection(): void {
+    this.audio.playMenuConfirm();
+
     if (this.mode === 'root') {
       this.handleRootAction(ROOT_OPTIONS[this.rootIndex]);
       return;
@@ -271,7 +335,7 @@ export class PartyScene extends Phaser.Scene {
     }
 
     if (this.mode === 'optionsConfirm') {
-      this.confirmDifficultyChange();
+      this.confirmModeChange();
       return;
     }
 
@@ -419,7 +483,13 @@ export class PartyScene extends Phaser.Scene {
       return;
     }
 
+    this.userSettings = getUserSettings();
     this.pendingDifficulty = this.gameState.difficulty;
+    this.pendingChallengeMode = this.gameState.challengeMode;
+    this.pendingMusicEnabled = this.userSettings.musicEnabled;
+    this.pendingMusicVolume = this.userSettings.musicVolume;
+    this.pendingSfxVolume = this.userSettings.sfxVolume;
+    this.pendingTextSpeed = this.userSettings.textSpeed;
     this.optionsIndex = 0;
     this.mode = 'options';
     this.renderView();
@@ -508,6 +578,8 @@ export class PartyScene extends Phaser.Scene {
   }
 
   private handleBack(): void {
+    this.audio.playMenuBack();
+
     if (this.mode === 'storageManager') {
       this.closeMenu();
       return;
@@ -594,11 +666,16 @@ export class PartyScene extends Phaser.Scene {
       .setOrigin(0)
       .setScrollFactor(0);
 
-    const panel = this.add
-      .rectangle(24, 20, width - 48, height - 40, 0x081324, 0.96)
-      .setOrigin(0)
-      .setStrokeStyle(2, 0x87b5dc, 1)
-      .setScrollFactor(0);
+    const panel = createPanel(this, {
+      x: 24,
+      y: 20,
+      width: width - 48,
+      height: height - 40,
+      fillColor: 0x081324,
+      fillAlpha: 0.96,
+      strokeColor: 0x87b5dc,
+      strokeWidth: 2
+    });
 
     this.layer.add([backdrop, panel]);
 
@@ -625,6 +702,11 @@ export class PartyScene extends Phaser.Scene {
     } else {
       this.renderMessage(panel);
     }
+
+    createBackHint(this, this.launchedFromTerminal ? 'Esc: Close' : 'Esc: Back', {
+      container: this.layer,
+      depth: 20010
+    });
   }
 
   private renderHeader(
@@ -632,34 +714,35 @@ export class PartyScene extends Phaser.Scene {
     title: string,
     subtitle?: string
   ): void {
-    const titleText = this.add
-      .text(panel.x + 14, panel.y + 10, title, {
-        fontFamily: '"Courier New", monospace',
-        fontSize: '20px',
-        color: '#f4f8ff'
-      })
-      .setScrollFactor(0);
-
-    this.layer.add(titleText);
+    createHeadingText(this, panel.x + 14, panel.y + 10, title, {
+      size: 20,
+      color: UI_THEME.headingColor,
+      container: this.layer
+    });
 
     if (subtitle) {
-      const subtitleText = this.add
-        .text(panel.x + 14, panel.y + 36, subtitle, {
-          fontFamily: '"Courier New", monospace',
-          fontSize: '13px',
-          color: '#9ec3df'
-        })
-        .setScrollFactor(0);
-
-      this.layer.add(subtitleText);
+      createBodyText(this, panel.x + 14, panel.y + 36, subtitle, {
+        size: 13,
+        color: '#9ec3df',
+        container: this.layer
+      });
     }
+
+    createTinyIcon(this, panel.x + 6, panel.y + 20, {
+      size: 4,
+      color: 0x9ec3df,
+      container: this.layer
+    });
   }
 
   private renderRootMenu(panel: Phaser.GameObjects.Rectangle): void {
+    const timeLabel = this.formatPlayTime(this.gameState.meta.playTimeSeconds);
     this.renderHeader(
       panel,
       'Menu',
-      `Difficulty: ${this.gameState.difficulty.toUpperCase()}  Esc: Close`
+      `Difficulty: ${this.gameState.difficulty.toUpperCase()}  Challenge: ${
+        this.gameState.challengeMode ? 'ON' : 'OFF'
+      }  Time: ${timeLabel}`
     );
 
     ROOT_OPTIONS.forEach((option, index) => {
@@ -857,11 +940,17 @@ export class PartyScene extends Phaser.Scene {
   }
 
   private renderOptionsMenu(panel: Phaser.GameObjects.Rectangle): void {
-    this.renderHeader(panel, 'Options', 'Adjust difficulty. Enter: Select  Esc: Back');
+    this.renderHeader(panel, 'Options', 'Gameplay-safe UX settings. Enter: Select  Esc: Back');
 
     const rows = [
       `Difficulty: ${this.pendingDifficulty.toUpperCase()}`,
-      'Apply Difficulty Change',
+      `Challenge Mode: ${this.pendingChallengeMode ? 'ON' : 'OFF'}`,
+      `Music: ${this.pendingMusicEnabled ? 'ON' : 'OFF'}`,
+      `Music Volume: ${Math.round(this.pendingMusicVolume * 100)}%`,
+      `SFX Volume: ${Math.round(this.pendingSfxVolume * 100)}%`,
+      `Text Speed: ${this.pendingTextSpeed.toUpperCase()}`,
+      'Help',
+      'Apply Mode Change',
       'Back'
     ];
 
@@ -869,7 +958,7 @@ export class PartyScene extends Phaser.Scene {
       this.createSelectableRow({
         panel,
         index,
-        y: panel.y + 76 + index * 44,
+        y: panel.y + 66 + index * 32,
         text,
         selected: index === this.optionsIndex,
         onSelect: () => {
@@ -886,10 +975,10 @@ export class PartyScene extends Phaser.Scene {
     const hint = this.add
       .text(
         panel.x + 14,
-        panel.y + panel.height - 34,
-        'Left/Right on Difficulty to cycle. Changes require confirmation.',
+        panel.y + 50,
+        'Left/Right adjusts highlighted setting. Mode changes require confirmation.',
         {
-          fontFamily: '"Courier New", monospace',
+          fontFamily: UI_THEME.fontFamily,
           fontSize: '12px',
           color: '#8fb6d7'
         }
@@ -900,11 +989,17 @@ export class PartyScene extends Phaser.Scene {
   }
 
   private renderOptionsConfirm(panel: Phaser.GameObjects.Rectangle): void {
-    this.renderHeader(
-      panel,
-      'Confirm Difficulty',
-      `Change from ${this.gameState.difficulty.toUpperCase()} to ${this.pendingDifficulty.toUpperCase()}?`
-    );
+    const difficultyLine =
+      this.pendingDifficulty === this.gameState.difficulty
+        ? `Difficulty stays ${this.gameState.difficulty.toUpperCase()}`
+        : `${this.gameState.difficulty.toUpperCase()} -> ${this.pendingDifficulty.toUpperCase()}`;
+    const challengeLine =
+      this.pendingChallengeMode === this.gameState.challengeMode
+        ? `Challenge stays ${this.gameState.challengeMode ? 'ON' : 'OFF'}`
+        : `${this.gameState.challengeMode ? 'ON' : 'OFF'} -> ${
+            this.pendingChallengeMode ? 'ON' : 'OFF'
+          }`;
+    this.renderHeader(panel, 'Confirm Mode Change', `${difficultyLine}\n${challengeLine}`);
 
     const options = ['Confirm', 'Cancel'];
     options.forEach((option, index) => {
@@ -931,7 +1026,7 @@ export class PartyScene extends Phaser.Scene {
 
       button.on('pointerdown', () => {
         this.optionsConfirmIndex = index;
-        this.confirmDifficultyChange();
+        this.confirmModeChange();
       });
 
       const text = this.add
@@ -953,8 +1048,45 @@ export class PartyScene extends Phaser.Scene {
     }
 
     if (this.optionsIndex === 1) {
-      if (this.pendingDifficulty === this.gameState.difficulty) {
-        this.showMessage('Difficulty is already set to this mode.', 'options', 'Options');
+      this.pendingChallengeMode = !this.pendingChallengeMode;
+      this.audio.playMenuMove();
+      this.renderView();
+      return;
+    }
+
+    if (this.optionsIndex === 2) {
+      this.pendingMusicEnabled = !this.pendingMusicEnabled;
+      this.persistUserSettings();
+      this.renderView();
+      return;
+    }
+
+    if (this.optionsIndex === 3) {
+      this.adjustPendingMusicVolume(0.1);
+      return;
+    }
+
+    if (this.optionsIndex === 4) {
+      this.adjustPendingSfxVolume(0.1);
+      return;
+    }
+
+    if (this.optionsIndex === 5) {
+      this.shiftPendingTextSpeed(1);
+      return;
+    }
+
+    if (this.optionsIndex === 6) {
+      this.showMessage(this.getControlsHelpText(), 'options', 'Help');
+      return;
+    }
+
+    if (this.optionsIndex === 7) {
+      if (
+        this.pendingDifficulty === this.gameState.difficulty &&
+        this.pendingChallengeMode === this.gameState.challengeMode
+      ) {
+        this.showMessage('Difficulty and challenge mode are unchanged.', 'options', 'Options');
         return;
       }
 
@@ -968,17 +1100,22 @@ export class PartyScene extends Phaser.Scene {
     this.renderView();
   }
 
-  private confirmDifficultyChange(): void {
+  private confirmModeChange(): void {
     if (this.optionsConfirmIndex === 1) {
+      this.audio.playMenuBack();
       this.mode = 'options';
       this.renderView();
       return;
     }
 
+    this.audio.playMenuConfirm();
     this.gameState.difficulty = this.pendingDifficulty;
+    this.gameState.challengeMode = this.pendingChallengeMode;
     SaveSystem.save(this.gameState);
     this.showMessage(
-      `Difficulty changed to ${this.gameState.difficulty.toUpperCase()}.`,
+      `Difficulty: ${this.gameState.difficulty.toUpperCase()}  Challenge: ${
+        this.gameState.challengeMode ? 'ON' : 'OFF'
+      }.`,
       'options',
       'Options'
     );
@@ -988,7 +1125,85 @@ export class PartyScene extends Phaser.Scene {
     const currentIndex = DIFFICULTY_OPTIONS.indexOf(this.pendingDifficulty);
     const nextIndex = Phaser.Math.Wrap(currentIndex + direction, 0, DIFFICULTY_OPTIONS.length);
     this.pendingDifficulty = DIFFICULTY_OPTIONS[nextIndex];
+    this.audio.playMenuMove();
     this.renderView();
+  }
+
+  private shiftPendingTextSpeed(direction: number): void {
+    const currentIndex = TEXT_SPEED_OPTIONS.indexOf(this.pendingTextSpeed);
+    const nextIndex = Phaser.Math.Wrap(currentIndex + direction, 0, TEXT_SPEED_OPTIONS.length);
+    this.pendingTextSpeed = TEXT_SPEED_OPTIONS[nextIndex];
+    this.persistUserSettings();
+    this.audio.playMenuMove();
+    this.renderView();
+  }
+
+  private adjustPendingMusicVolume(direction: number): void {
+    this.pendingMusicVolume = Phaser.Math.Clamp(
+      Math.round((this.pendingMusicVolume + direction) * 10) / 10,
+      0,
+      1
+    );
+    this.persistUserSettings();
+    this.audio.playMenuMove();
+    this.renderView();
+  }
+
+  private adjustPendingSfxVolume(direction: number): void {
+    this.pendingSfxVolume = Phaser.Math.Clamp(
+      Math.round((this.pendingSfxVolume + direction) * 10) / 10,
+      0,
+      1
+    );
+    this.persistUserSettings();
+    this.audio.playMenuMove();
+    this.renderView();
+  }
+
+  private handleOptionsHorizontalAdjust(direction: number): void {
+    if (this.optionsIndex === 0) {
+      this.shiftPendingDifficulty(direction);
+      return;
+    }
+
+    if (this.optionsIndex === 1) {
+      this.pendingChallengeMode = !this.pendingChallengeMode;
+      this.audio.playMenuMove();
+      this.renderView();
+      return;
+    }
+
+    if (this.optionsIndex === 2) {
+      this.pendingMusicEnabled = !this.pendingMusicEnabled;
+      this.persistUserSettings();
+      this.audio.playMenuMove();
+      this.renderView();
+      return;
+    }
+
+    if (this.optionsIndex === 3) {
+      this.adjustPendingMusicVolume(direction * 0.1);
+      return;
+    }
+
+    if (this.optionsIndex === 4) {
+      this.adjustPendingSfxVolume(direction * 0.1);
+      return;
+    }
+
+    if (this.optionsIndex === 5) {
+      this.shiftPendingTextSpeed(direction);
+    }
+  }
+
+  private persistUserSettings(): void {
+    this.userSettings = setUserSettings({
+      musicEnabled: this.pendingMusicEnabled,
+      musicVolume: this.pendingMusicVolume,
+      sfxVolume: this.pendingSfxVolume,
+      textSpeed: this.pendingTextSpeed
+    });
+    AudioSystem.refreshSettings();
   }
 
   private renderStorageManager(panel: Phaser.GameObjects.Rectangle): void {
@@ -1010,9 +1225,7 @@ export class PartyScene extends Phaser.Scene {
 
       tabRect.on('pointerdown', () => {
         if (this.storageTab !== tab) {
-          this.storageTab = tab;
-          this.clampStorageSelectionIndex();
-          this.renderView();
+          this.switchStorageTabTo(tab);
         }
       });
 
@@ -1074,10 +1287,12 @@ export class PartyScene extends Phaser.Scene {
         selected: index === this.storageSelectionIndex,
         onSelect: () => {
           this.storageSelectionIndex = index;
+          this.storageSelectionByTab[this.storageTab] = index;
           this.renderView();
         },
         onConfirm: () => {
           this.storageSelectionIndex = index;
+          this.storageSelectionByTab[this.storageTab] = index;
           this.confirmSelection();
         }
       });
@@ -1288,12 +1503,16 @@ export class PartyScene extends Phaser.Scene {
     onSelect: () => void;
     onConfirm: () => void;
   }): Phaser.GameObjects.Rectangle {
-    const row = this.add
-      .rectangle(options.panel.x + 14, options.y, options.panel.width - 28, 34, 0x16253d, 1)
-      .setOrigin(0)
-      .setStrokeStyle(2, options.selected ? 0xbce0ff : 0x4f7398, 1)
-      .setScrollFactor(0)
-      .setInteractive({ useHandCursor: true });
+    const row = createPanel(this, {
+      x: options.panel.x + 14,
+      y: options.y,
+      width: options.panel.width - 28,
+      height: 34,
+      fillColor: UI_THEME.rowFill,
+      fillAlpha: 1,
+      strokeColor: options.selected ? UI_THEME.rowSelectedStroke : UI_THEME.rowStroke,
+      strokeWidth: 2
+    }).setInteractive({ useHandCursor: true });
 
     row.on('pointerover', () => {
       options.onSelect();
@@ -1303,13 +1522,21 @@ export class PartyScene extends Phaser.Scene {
       options.onConfirm();
     });
 
-    const label = this.add
-      .text(row.x + 10, row.y + 9, `${options.selected ? '>' : ' '} ${options.text}`, {
-        fontFamily: '"Courier New", monospace',
-        fontSize: '14px',
-        color: options.selected ? '#f6e492' : '#d5e6f8'
-      })
-      .setScrollFactor(0);
+    const label = createBodyText(
+      this,
+      row.x + 10,
+      row.y + 9,
+      `${options.selected ? '>' : ' '} ${options.text}`,
+      {
+        size: 14,
+        color: options.selected ? UI_THEME.accentColor : UI_THEME.bodyColor
+      }
+    );
+    createTinyIcon(this, row.x + 6, row.y + 17, {
+      size: 3,
+      color: options.selected ? 0xbde2ff : 0x6f8dad,
+      container: this.layer
+    });
 
     this.layer.add([row, label]);
 
@@ -1318,8 +1545,17 @@ export class PartyScene extends Phaser.Scene {
 
   private switchStorageTab(direction: number): void {
     const tabIndex = STORAGE_TABS.indexOf(this.storageTab);
-    this.storageTab = STORAGE_TABS[Phaser.Math.Wrap(tabIndex + direction, 0, STORAGE_TABS.length)];
+    const nextTab = STORAGE_TABS[Phaser.Math.Wrap(tabIndex + direction, 0, STORAGE_TABS.length)];
+    this.switchStorageTabTo(nextTab);
+  }
+
+  private switchStorageTabTo(nextTab: StorageTab): void {
+    this.storageSelectionByTab[this.storageTab] = this.storageSelectionIndex;
+    this.storageTab = nextTab;
+    this.storageSelectionIndex = this.storageSelectionByTab[nextTab] ?? 0;
     this.clampStorageSelectionIndex();
+    this.storageSelectionByTab[this.storageTab] = this.storageSelectionIndex;
+    this.audio.playMenuMove();
     this.renderView();
   }
 
@@ -1331,6 +1567,7 @@ export class PartyScene extends Phaser.Scene {
     const entries = this.getStorageEntries(this.storageTab);
     if (entries.length <= 0) {
       this.storageSelectionIndex = 0;
+      this.storageSelectionByTab[this.storageTab] = 0;
       return;
     }
 
@@ -1339,6 +1576,7 @@ export class PartyScene extends Phaser.Scene {
       0,
       entries.length - 1
     );
+    this.storageSelectionByTab[this.storageTab] = this.storageSelectionIndex;
   }
 
   private getInventoryName(item: InventoryKey): string {
@@ -1359,6 +1597,35 @@ export class PartyScene extends Phaser.Scene {
     }
 
     return 'Cleanse';
+  }
+
+  private getControlsHelpText(): string {
+    return [
+      'Overworld:',
+      'Arrow Keys / WASD: Move',
+      'Enter: Interact or advance dialog',
+      'Esc: Open menu',
+      'M: Toggle minimap',
+      '',
+      'Battle:',
+      'Arrow Keys / WASD: Navigate',
+      'Enter: Confirm',
+      'B: Open Bag',
+      'Esc: Back',
+      '',
+      'Challenge Mode:',
+      'No items in trainer battles'
+    ].join('\n');
+  }
+
+  private formatPlayTime(totalSeconds: number): string {
+    const clamped = Math.max(0, Math.floor(totalSeconds));
+    const hours = Math.floor(clamped / 3600);
+    const minutes = Math.floor((clamped % 3600) / 60);
+    const seconds = clamped % 60;
+    return `${hours.toString().padStart(2, '0')}:${minutes
+      .toString()
+      .padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   }
 
   private getCreatureLabel(creature: CreatureInstance): string {

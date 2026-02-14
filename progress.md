@@ -444,3 +444,75 @@ Original prompt: Create a new folder "corebeasts-rpg" and build a working Phaser
   - `npm run lint` passes.
   - `npm run build` passes.
   - Playwright smoke run (`output/benchmark9-smoke/`) shows stable runtime progression (Title -> Intro) with no emitted `errors-*.json`.
+- Polish pass (in progress): added shared UiTheme + UserSettings, upgraded AudioSystem with persistent music/sfx mix + generated title/overworld/battle loops + menu SFX wrappers, added text-speed-aware reveal in DialogSystem (and intro), started scene integrations (Title/Starter/Credits/Overworld/Battle/Party) including minimap toggle scaffold and deterministic tile variants.
+- Polish pass completed: added shared UI theme helper (src/game/ui/UiTheme.ts) and persistent user settings (src/game/systems/UserSettings.ts) for music/SFX/text speed.\n- Audio upgrade: AudioSystem now supports menu tick/confirm/back SFX wrappers and generated looping tracks ( itle, overworld, attle) with runtime settings refresh.\n- Dialog/text speed: DialogSystem now has typewriter reveal tied to text speed (Slow/Normal/Fast), Enter skip behavior; intro dialog also uses reveal pacing.\n- Title/Party/Battle/Starter/Credits scene presentation pass: themed panels/text styling, back hints, Title Help panel, in-game Options Help, and options sliders/toggles for audio/text speed.\n- Overworld presentation: deterministic tile texture variants by tile position and minimap toggle (M) with player/exits markers.\n- Battle presentation: trainer intro line flow (Trainer X wants to battle!), wild enemy slide-in intro, status badges beside HP bars, stronger impact flash/shake on >=25% max-HP hits, and updated effectiveness text (It's strong! / It's weak...).\n- Validation completed:
+  pm run format:fix,
+  pm run lint, and
+  pm run build all pass. Playwright smoke runs executed with web_game_playwright_client.js (title help + intro/starter/overworld progression) and no emitted errors-\*.json.
+- Final verification rerun after README/format updates:
+  pm run format ?,
+  pm run lint ?,
+  pm run build ?.
+- Benchmark 10 implementation in progress:
+  - `TitleScene` now supports NG+ title flow scaffolding: dynamic menu entry (`New Game+` when postgame save exists), difficulty + challenge run setup, NG+ carry-over selection panel, and best-time display by difficulty.
+  - `StarterSelectionScene` now consumes optional NG+ carry-over payload and injects one reset-Lv5 carry creature after starter selection.
+  - `OverworldScene` now adds challenge wild encounter level boost and NG+ early-rare encounter roll; trainer team generation now supports deterministic seeded randomization per run (`runSeed + ngPlusCycle + mapId + trainerId`) while preserving specialization and preventing duplicates.
+  - `PartyScene` options now include `Challenge Mode`, mode-change confirmation supports difficulty+challenge together, and root pause menu header shows run timer.
+  - `CreditsScene` now records best time per difficulty and displays completion mode metadata (difficulty/challenge/NG+ cycle).
+  - `README.md` updated for NG+, challenge mode, timer, and persistence notes.
+- Pending in this pass:
+  - Run format/lint/build.
+  - Execute Playwright smoke for Title NG+ and Options flow validation.
+  - Fix any compile/runtime regressions.
+- Benchmark 10 completed:
+  - Title flow now conditionally exposes `New Game+` when `postgameUnlocked` save exists.
+  - New run setup in Title Settings now supports both Difficulty and Challenge Mode toggles.
+  - New Game+ supports optional single-creature carry-over (reset Lv5) and displays best times per difficulty.
+  - Overworld trainer teams in NG+ now use deterministic seeded randomization (`runSeed + ngPlusCycle + mapId + trainerId`) with no intra-team duplicates and type-specialization preserved by template type sets.
+  - NG+ trainer baseline levels are increased by +3.
+  - Challenge mode wild encounters now apply slight level-range pressure.
+  - NG+ can roll rare encounter entries earlier at low probability.
+  - Pause menu root now displays a run timer; options now support Challenge Mode confirmation alongside Difficulty.
+  - Credits now record and display best time per difficulty and show current run mode metadata.
+- Validation:
+  - `npm run format:fix` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - Playwright client smoke checks passed with no emitted console error artifacts:
+    - `output/benchmark10-smoke/` (title -> intro flow)
+    - `output/benchmark10-settings-smoke/` (title settings panel with challenge toggle)
+  - Additional title-state check with seeded postgame save confirms NG+ menu visibility:
+    - `output/benchmark10-ngplus-title.png`
+    - `output/benchmark10-ngplus-state.json`
+- Implemented Benchmark 11 packaging/distribution pass (no gameplay changes).
+  - Repo hygiene/docs:
+    - Added `LICENSE` (MIT), `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `CHANGELOG.md`.
+    - Expanded `.gitignore` for build/release/output/env artifacts.
+  - Build/release scripts (`package.json`):
+    - Added `typecheck`, `build:web`, `build:share`, `zip:web`, `release:notes`, `build:pages`.
+    - Added Electron scripts: `dev:desktop`, `build:electron`, `build:desktop`, `build:desktop:win`, `build:desktop:mac`, `build:desktop:linux`.
+    - Added electron-builder config (win/mac/linux targets) and set version to `0.11.0`.
+  - Added new config/tooling files:
+    - `vite.config.ts` with configurable base path via `VITE_BASE_PATH`.
+    - `electron/main.ts`, `electron/preload.ts`.
+    - `scripts/zip-web.mjs`, `scripts/release-notes.mjs`, `scripts/build-pages.mjs`.
+    - `.github/workflows/pages.yml` for GitHub Pages deploy on push to `main`.
+  - README rewritten for friend/family distribution:
+    - what the game is, controls, local run/build, web/desktop sharing, troubleshooting, known limits.
+    - includes exact commands for git init/commit, gh repo create/push, web zip, desktop build, pages deploy.
+- Validation results:
+  - `npm install` passed.
+  - `npm run lint` passed.
+  - `npm run build` passed.
+  - `npm run zip:web` passed and created `release/corebeasts-web-v0.11.0.zip`.
+  - `npm run release:notes` passed and created `release/release-notes-v0.11.0.md`.
+  - `npm run build:pages` passed.
+  - `npm run build:desktop` passed (Windows unpacked portable folder).
+  - `npm run build:desktop:win` passed (portable exe + NSIS installer).
+- Packaging note:
+  - Earlier electron-builder failure due Windows symlink privilege (winCodeSign cache extraction) was resolved by setting `build.win.signAndEditExecutable=false` in `package.json`.
+- Final packaging verification rerun after adding explicit `electron/renderer.ts`:
+  - `npm run build:electron` passed (`main.mjs`, `preload.mjs`, `renderer.mjs`).
+  - `npm run build:desktop` passed (`release/desktop/win-unpacked`).
+  - `npm run build:desktop:win` passed (portable + NSIS installer artifacts).
+- No gameplay logic changes were introduced in Benchmark 11; this pass was packaging/docs/tooling only.

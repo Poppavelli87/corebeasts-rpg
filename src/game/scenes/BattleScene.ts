@@ -13,6 +13,7 @@ import { BattleEngine, type BattleAction } from '../systems/BattleEngine';
 import {
   applyExperienceGain,
   calculateBattleXpReward,
+  getChallengeLevelCap,
   getMaxMovesForLevel,
   type EvolutionProgress,
   type LevelUpProgress
@@ -20,6 +21,7 @@ import {
 import { ProcSpriteFactory } from '../systems/ProcSpriteFactory';
 import { SaveSystem } from '../systems/SaveSystem';
 import { getTypeMultiplier } from '../systems/TypeChart';
+import { getBattleMessageSpeedMultiplier, getUserSettings } from '../systems/UserSettings';
 import {
   addCreatureToCollection,
   consumeInventory,
@@ -30,6 +32,13 @@ import {
   type GameState,
   type InventoryKey
 } from '../state/GameState';
+import {
+  UI_THEME,
+  createBackHint,
+  createBodyText,
+  createPanel,
+  createTinyIcon
+} from '../ui/UiTheme';
 
 type BattleOutcome = 'victory' | 'defeat' | 'capture' | 'escaped';
 
@@ -47,6 +56,7 @@ type HpBarUi = {
   title: Phaser.GameObjects.Text;
   fill: Phaser.GameObjects.Rectangle;
   label: Phaser.GameObjects.Text;
+  statusBadge: Phaser.GameObjects.Text;
   maxWidth: number;
   maxHp: number;
   displayedHp: number;
@@ -197,6 +207,7 @@ export class BattleScene extends Phaser.Scene {
   public create(data: BattleSceneData): void {
     this.resetRuntimeState();
     this.audio = new AudioSystem(this);
+    this.audio.playMusic('battle');
     this.gameState = getActiveGameState();
 
     if (this.gameState.party.length === 0) {
@@ -242,13 +253,7 @@ export class BattleScene extends Phaser.Scene {
 
     const enemy = this.getActiveEnemyCreature();
     if (enemy) {
-      const introMessage =
-        this.battleType === 'wild'
-          ? this.rareEncounter
-            ? `A rare ${this.getCreatureLabel(enemy)} emerged from the grass!`
-            : `Wild ${this.getCreatureLabel(enemy)} appeared!`
-          : `${this.trainerName} sent out ${this.getCreatureLabel(enemy)}!`;
-      void this.playIntroSequence(introMessage);
+      void this.playIntroSequence();
     }
 
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -347,9 +352,6 @@ export class BattleScene extends Phaser.Scene {
       .setScale(3)
       .setAlpha(0)
       .setDepth(20);
-
-    void this.playSendOutAnimation('enemy');
-    void this.playSendOutAnimation('player');
   }
 
   private createCombatPanels(): void {
@@ -364,19 +366,29 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private createBattlePanel(): void {
-    const panel = this.add
-      .rectangle(0, this.battlePanelTop, this.scale.width, 134, 0x08111f, 0.97)
-      .setOrigin(0)
-      .setStrokeStyle(2, 0x8cb6dc, 1)
-      .setDepth(40);
+    const panel = createPanel(this, {
+      x: 0,
+      y: this.battlePanelTop,
+      width: this.scale.width,
+      height: 134,
+      fillColor: 0x08111f,
+      fillAlpha: 0.97,
+      strokeColor: 0x8cb6dc,
+      strokeWidth: 2,
+      depth: 40
+    });
 
-    this.messageText = this.add
-      .text(16, panel.y + 8, '', {
-        fontFamily: '"Courier New", monospace',
-        fontSize: '16px',
-        color: '#f6f8ff'
-      })
-      .setDepth(41);
+    this.messageText = createBodyText(this, 16, panel.y + 8, '', {
+      size: 16,
+      color: '#f6f8ff',
+      depth: 41,
+      wordWrapWidth: this.scale.width - 32
+    });
+    createBackHint(this, 'Esc: Back', {
+      x: this.scale.width - 10,
+      y: this.scale.height - 8,
+      depth: 44
+    });
 
     this.createCommandButtons(panel.y + 54);
     this.refreshCommandHighlights();
@@ -398,7 +410,13 @@ export class BattleScene extends Phaser.Scene {
       enabled: boolean;
     }> = [
       { command: 'fight', label: 'Fight', row: 0, col: 0, enabled: true },
-      { command: 'bag', label: 'Bag', row: 0, col: 1, enabled: true },
+      {
+        command: 'bag',
+        label: 'Bag',
+        row: 0,
+        col: 1,
+        enabled: !(this.gameState.challengeMode && this.battleType === 'trainer')
+      },
       { command: 'switch', label: 'Switch', row: 1, col: 0, enabled: true },
       {
         command: 'run',
@@ -421,7 +439,7 @@ export class BattleScene extends Phaser.Scene {
 
       const text = this.add
         .text(background.x + 8, background.y + 8, entry.label, {
-          fontFamily: '"Courier New", monospace',
+          fontFamily: UI_THEME.fontFamily,
           fontSize: '18px',
           color: '#dce8f8'
         })
@@ -466,11 +484,27 @@ export class BattleScene extends Phaser.Scene {
     this.commandButtons = [];
   }
 
-  private async playIntroSequence(introMessage: string): Promise<void> {
+  private async playIntroSequence(): Promise<void> {
     this.actionInProgress = true;
-    await this.showQueuedMessages([introMessage], 620);
-    const player = this.getActivePlayerCreature();
+
     const enemy = this.getActiveEnemyCreature();
+    const enemyName = enemy ? this.getCreatureLabel(enemy) : 'Corebeast';
+
+    await this.playSendOutAnimation('player');
+
+    if (this.battleType === 'wild') {
+      await this.playWildEnemySlideIn();
+      const line = this.rareEncounter
+        ? `A rare ${enemyName} emerged from the grass!`
+        : `Wild ${enemyName} appeared!`;
+      await this.showQueuedMessages([line], 620);
+    } else {
+      await this.showQueuedMessages([`${this.trainerName} wants to battle!`], 620);
+      await this.playSendOutAnimation('enemy');
+      await this.showQueuedMessages([`${this.trainerName} sent out ${enemyName}!`], 560);
+    }
+
+    const player = this.getActivePlayerCreature();
     this.triggerAbilityHook('onEnter', player, enemy);
     this.triggerAbilityHook('onEnter', enemy, player);
     await this.flushMessageQueue();
@@ -516,7 +550,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     if (movedSelection) {
-      this.audio.beep({ frequency: 720, durationMs: 45 });
+      this.audio.playMenuMove();
       this.refreshCommandHighlights();
       this.publishBattleState();
     }
@@ -587,7 +621,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     if (movedSelection) {
-      this.audio.beep({ frequency: 720, durationMs: 45 });
+      this.audio.playMenuMove();
       this.refreshMoveHighlights();
       this.publishBattleState();
     }
@@ -684,6 +718,7 @@ export class BattleScene extends Phaser.Scene {
     if (!this.menuActive || this.actionInProgress || this.battleResolved) {
       return;
     }
+    this.audio.playMenuConfirm();
 
     if (command === 'fight') {
       this.openMoveSelection();
@@ -1102,7 +1137,7 @@ export class BattleScene extends Phaser.Scene {
       this.selectedBagIndex =
         (this.selectedBagIndex + direction + this.bagItemButtons.length) %
         this.bagItemButtons.length;
-      this.audio.beep({ frequency: 700, durationMs: 40 });
+      this.audio.playMenuMove();
       this.refreshBagHighlights();
       this.publishBattleState();
     }
@@ -1129,16 +1164,22 @@ export class BattleScene extends Phaser.Scene {
       return;
     }
 
+    if (this.gameState.challengeMode && this.battleType === 'trainer') {
+      this.audio.playMenuBack();
+      this.setMessage('Challenge Mode: Items are disabled in trainer battles.');
+      return;
+    }
+
     const count = this.gameState.inventory[item];
     if (count <= 0) {
-      this.audio.beep({ frequency: 260, durationMs: 90 });
+      this.audio.playMenuBack();
       this.setMessage(`No ${this.getItemLabel(item)} left.`);
       return;
     }
 
     if (item === 'coreSeal') {
       if (this.battleType !== 'wild') {
-        this.audio.beep({ frequency: 260, durationMs: 90 });
+        this.audio.playMenuBack();
         this.setMessage('Core Seal cannot be used in trainer battles.');
         return;
       }
@@ -1175,7 +1216,7 @@ export class BattleScene extends Phaser.Scene {
       const healedAmount = healResult.after - healResult.before;
 
       if (healedAmount <= 0) {
-        this.audio.beep({ frequency: 260, durationMs: 90 });
+        this.audio.playMenuBack();
         this.setMessage('HP is already full.');
         return;
       }
@@ -1202,7 +1243,7 @@ export class BattleScene extends Phaser.Scene {
 
     const cleared = this.engine.clearStatus('player');
     if (!cleared) {
-      this.audio.beep({ frequency: 260, durationMs: 90 });
+      this.audio.playMenuBack();
       this.setMessage('No status condition to cleanse.');
       return;
     }
@@ -1271,7 +1312,7 @@ export class BattleScene extends Phaser.Scene {
 
   private async attemptRun(): Promise<void> {
     if (this.battleType !== 'wild') {
-      this.audio.beep({ frequency: 250, durationMs: 80 });
+      this.audio.playMenuBack();
       this.setMessage('No retreat in trainer battles.');
       return;
     }
@@ -1288,7 +1329,7 @@ export class BattleScene extends Phaser.Scene {
   private async beginManualSwitch(): Promise<void> {
     const switchable = this.getSwitchablePartyIndices();
     if (switchable.length === 0) {
-      this.audio.beep({ frequency: 250, durationMs: 80 });
+      this.audio.playMenuBack();
       this.setMessage('No other party member can battle.');
       return;
     }
@@ -1386,7 +1427,7 @@ export class BattleScene extends Phaser.Scene {
         this.selectedSwitchIndex = index;
         this.refreshSwitchHighlights();
         if (disabled) {
-          this.audio.beep({ frequency: 250, durationMs: 70 });
+          this.audio.playMenuBack();
           return;
         }
         this.resolveSwitchSelection(index);
@@ -1473,7 +1514,7 @@ export class BattleScene extends Phaser.Scene {
         (normalizedCurrent + direction + selectableRows.length) % selectableRows.length;
 
       this.selectedSwitchIndex = selectableRows[nextPointer];
-      this.audio.beep({ frequency: 700, durationMs: 40 });
+      this.audio.playMenuMove();
       this.refreshSwitchHighlights();
       this.publishBattleState();
     }
@@ -1498,7 +1539,7 @@ export class BattleScene extends Phaser.Scene {
     }
 
     if (selected.disabled) {
-      this.audio.beep({ frequency: 250, durationMs: 70 });
+      this.audio.playMenuBack();
       return;
     }
 
@@ -1863,7 +1904,13 @@ export class BattleScene extends Phaser.Scene {
   private async playTurnActions(actions: BattleAction[]): Promise<void> {
     for (const action of actions) {
       if (action.type === 'message') {
-        await this.showQueuedMessages([action.text], 520);
+        const localizedMessage =
+          action.text === 'Super effective!'
+            ? "It's strong!"
+            : action.text === 'Not very effective...'
+              ? "It's weak..."
+              : action.text;
+        await this.showQueuedMessages([localizedMessage], 520);
       } else if (action.type === 'damage') {
         await this.playDamageAction(action);
       } else if (action.type === 'status') {
@@ -2055,6 +2102,13 @@ export class BattleScene extends Phaser.Scene {
     await this.showQueuedMessages(['Victory!'], 720);
 
     const rewards = [...this.pendingXpByPartyIndex.entries()].sort((a, b) => a[0] - b[0]);
+    const challengeLevelCap = this.gameState.challengeMode
+      ? getChallengeLevelCap(
+          this.gameState.storyFlags,
+          this.gameState.difficulty,
+          this.gameState.newGamePlus
+        )
+      : undefined;
 
     for (const [partyIndex, totalXp] of rewards) {
       const creature = this.gameState.party[partyIndex];
@@ -2064,12 +2118,30 @@ export class BattleScene extends Phaser.Scene {
 
       const progression = applyExperienceGain(creature, totalXp, {
         mapId: this.gameState.player.mapId,
-        storyFlags: this.gameState.storyFlags
+        storyFlags: this.gameState.storyFlags,
+        levelCap: challengeLevelCap
       });
       await this.showQueuedMessages(
         [`${this.getCreatureLabel(creature)} gained ${totalXp} XP!`],
         820
       );
+
+      if (
+        challengeLevelCap !== undefined &&
+        progression.levelUps.length === 0 &&
+        creature.level >= challengeLevelCap
+      ) {
+        await this.showQueuedMessages(
+          [
+            `${this.getCreatureLabel(creature)} is capped at Lv ${challengeLevelCap}.`,
+            'Defeat the next Trial to raise the cap.'
+          ],
+          {
+            durationMs: 620,
+            mode: 'locked'
+          }
+        );
+      }
 
       for (const levelUp of progression.levelUps) {
         await this.handleLevelUp(creature, levelUp, partyIndex === this.activePlayerIndex);
@@ -2305,7 +2377,7 @@ export class BattleScene extends Phaser.Scene {
       this.selectedReplaceIndex =
         (this.selectedReplaceIndex + direction + this.replaceMoveButtons.length) %
         this.replaceMoveButtons.length;
-      this.audio.beep({ frequency: 700, durationMs: 40 });
+      this.audio.playMenuMove();
       this.refreshMoveReplaceHighlights();
       this.publishBattleState();
     }
@@ -2417,19 +2489,43 @@ export class BattleScene extends Phaser.Scene {
   }
 
   private createCombatantPanel(x: number, y: number, creature: CreatureInstance): HpBarUi {
-    this.add
-      .rectangle(x, y, 302, 74, 0x0a101b, 0.94)
-      .setOrigin(0)
-      .setStrokeStyle(2, 0x95bfd9, 1)
-      .setDepth(30);
+    createPanel(this, {
+      x,
+      y,
+      width: 302,
+      height: 74,
+      fillColor: 0x0a101b,
+      fillAlpha: 0.94,
+      strokeColor: 0x95bfd9,
+      strokeWidth: 2,
+      depth: 30
+    });
 
-    const title = this.add
-      .text(x + 10, y + 8, `${this.getCreatureLabel(creature)}  Lv${creature.level}`, {
-        fontFamily: '"Courier New", monospace',
-        fontSize: '15px',
-        color: '#f7f8ff'
-      })
-      .setDepth(31);
+    const title = createBodyText(
+      this,
+      x + 10,
+      y + 8,
+      `${this.getCreatureLabel(creature)}  Lv${creature.level}`,
+      {
+        size: 15,
+        color: '#f7f8ff',
+        depth: 31
+      }
+    );
+    createTinyIcon(this, x + 6, y + 16, {
+      color: 0x9fd0ff,
+      size: 3,
+      depth: 31
+    });
+
+    const statusBadge = createBodyText(this, x + 234, y + 8, '', {
+      size: 10,
+      color: '#d8edff',
+      depth: 31
+    })
+      .setPadding(4, 1, 4, 1)
+      .setBackgroundColor('#243a54')
+      .setVisible(false);
 
     const track = this.add
       .rectangle(x + 10, y + 36, 210, 11, 0x1f2d3a, 1)
@@ -2444,7 +2540,7 @@ export class BattleScene extends Phaser.Scene {
 
     const hpText = this.add
       .text(x + 10, y + 52, '', {
-        fontFamily: '"Courier New", monospace',
+        fontFamily: UI_THEME.fontFamily,
         fontSize: '12px',
         color: '#b8d3e8'
       })
@@ -2454,12 +2550,14 @@ export class BattleScene extends Phaser.Scene {
       title,
       fill,
       label: hpText,
+      statusBadge,
       maxWidth: 210,
       maxHp: creature.stats.hp,
       displayedHp: creature.currentHp
     };
 
     this.applyHpVisual(hpUi, creature.currentHp);
+    this.applyStatusBadge(hpUi, creature.status);
     return hpUi;
   }
 
@@ -2467,12 +2565,14 @@ export class BattleScene extends Phaser.Scene {
     this.playerHpUi.title.setText(`${this.getCreatureLabel(creature)}  Lv${creature.level}`);
     this.playerHpUi.maxHp = creature.stats.hp;
     this.applyHpVisual(this.playerHpUi, creature.currentHp);
+    this.applyStatusBadge(this.playerHpUi, creature.status);
   }
 
   private updateEnemyCombatantPanel(creature: CreatureInstance): void {
     this.enemyHpUi.title.setText(`${this.getCreatureLabel(creature)}  Lv${creature.level}`);
     this.enemyHpUi.maxHp = creature.stats.hp;
     this.applyHpVisual(this.enemyHpUi, creature.currentHp);
+    this.applyStatusBadge(this.enemyHpUi, creature.status);
   }
 
   private refreshPlayerVisual(): void {
@@ -2520,9 +2620,11 @@ export class BattleScene extends Phaser.Scene {
       action.defender === 'player' ? this.getActivePlayerCreature() : this.getActiveEnemyCreature();
     const attacker =
       action.attacker === 'player' ? this.getActivePlayerCreature() : this.getActiveEnemyCreature();
+    const maxHp = defender?.stats.hp ?? targetHp.maxHp;
+    const isBigHit = maxHp > 0 && action.damage >= Math.ceil(maxHp * 0.25);
 
     this.audio.beep({ frequency: 300, durationMs: 90, type: 'triangle' });
-    await this.playAttackImpact(action.attacker, action.defender);
+    await this.playAttackImpact(action.attacker, action.defender, isBigHit);
     await this.animateHpBar(targetHp, action.remainingHp);
     this.triggerAbilityHook('onHit', defender, attacker);
     await this.flushMessageQueue();
@@ -2648,6 +2750,31 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  private async playWildEnemySlideIn(): Promise<void> {
+    const base = this.getSpriteBasePosition('enemy');
+    this.stopIdleBob('enemy');
+    this.tweens.killTweensOf(this.enemySprite);
+
+    this.enemySprite
+      .setVisible(true)
+      .setAlpha(1)
+      .setScale(3)
+      .setPosition(base.x + 54, base.y);
+    this.applyRareEnemyVisual();
+
+    await new Promise<void>((resolve) => {
+      this.tweens.add({
+        targets: this.enemySprite,
+        x: base.x,
+        duration: 160,
+        ease: 'Cubic.Out',
+        onComplete: () => resolve()
+      });
+    });
+
+    this.resumeIdleBob('enemy');
+  }
+
   private async playSendOutAnimation(target: 'player' | 'enemy'): Promise<void> {
     const sprite = this.getRoleSprite(target);
     const base = this.getSpriteBasePosition(target);
@@ -2709,7 +2836,8 @@ export class BattleScene extends Phaser.Scene {
 
   private async playAttackImpact(
     attacker: 'player' | 'enemy',
-    defender: 'player' | 'enemy'
+    defender: 'player' | 'enemy',
+    isBigHit = false
   ): Promise<void> {
     const attackerSprite = this.getRoleSprite(attacker);
     const defenderSprite = this.getRoleSprite(defender);
@@ -2736,7 +2864,7 @@ export class BattleScene extends Phaser.Scene {
       });
     });
 
-    await this.playDefenderHitFeedback(defender);
+    await this.playDefenderHitFeedback(defender, isBigHit);
 
     attackerSprite.setPosition(attackerBase.x, attackerBase.y);
     defenderSprite.setPosition(defenderBase.x, defenderBase.y);
@@ -2744,12 +2872,18 @@ export class BattleScene extends Phaser.Scene {
     this.resumeIdleBob(defender);
   }
 
-  private async playDefenderHitFeedback(defender: 'player' | 'enemy'): Promise<void> {
+  private async playDefenderHitFeedback(
+    defender: 'player' | 'enemy',
+    isBigHit: boolean
+  ): Promise<void> {
     const defenderSprite = this.getRoleSprite(defender);
     const base = this.getSpriteBasePosition(defender);
     const recoilDistance = defender === 'player' ? -6 : 6;
 
-    this.cameras.main.shake(80, 0.004, true);
+    if (isBigHit) {
+      this.cameras.main.flash(90, 255, 255, 255, true);
+    }
+    this.cameras.main.shake(isBigHit ? 110 : 80, isBigHit ? 0.007 : 0.004, true);
     const flashPromise = this.flashHitTarget(defenderSprite);
     const recoilPromise = new Promise<void>((resolve) => {
       this.tweens.add({
@@ -2774,6 +2908,54 @@ export class BattleScene extends Phaser.Scene {
     hpUi.fill.setFillStyle(ratio > 0.4 ? 0x52cd75 : ratio > 0.2 ? 0xf0bc53 : 0xdf5a5a, 1);
     hpUi.label.setText(`HP ${clamped}/${hpUi.maxHp}`);
     hpUi.displayedHp = clamped;
+  }
+
+  private applyStatusBadge(
+    hpUi: HpBarUi,
+    status: CreatureInstance['status'] | 'root' | 'gloom' | 'shock'
+  ): void {
+    const statusLabel = this.getStatusBadgeLabel(status);
+    if (!statusLabel) {
+      hpUi.statusBadge.setVisible(false).setText('');
+      return;
+    }
+
+    const badgeColor =
+      statusLabel === 'BURN'
+        ? '#5a3522'
+        : statusLabel === 'SHOCK'
+          ? '#214561'
+          : statusLabel === 'ROOT'
+            ? '#2c4e2f'
+            : '#3c2f58';
+
+    hpUi.statusBadge
+      .setVisible(true)
+      .setText(statusLabel)
+      .setBackgroundColor(badgeColor)
+      .setColor('#f2f8ff');
+  }
+
+  private getStatusBadgeLabel(
+    status: CreatureInstance['status'] | 'root' | 'gloom' | 'shock'
+  ): 'BURN' | 'SHOCK' | 'ROOT' | 'GLOOM' | null {
+    if (status === 'burn') {
+      return 'BURN';
+    }
+
+    if (status === 'stun' || status === 'shock') {
+      return 'SHOCK';
+    }
+
+    if (status === 'poison' || status === 'gloom') {
+      return 'GLOOM';
+    }
+
+    if (status === 'root') {
+      return 'ROOT';
+    }
+
+    return null;
   }
 
   private async endBattle(outcome: BattleOutcome): Promise<void> {
@@ -2946,10 +3128,12 @@ export class BattleScene extends Phaser.Scene {
       };
 
       if (mode === 'fast') {
+        const speedMultiplier = getBattleMessageSpeedMultiplier(getUserSettings().textSpeed);
+        const adjustedDuration = Math.round(durationMs * speedMultiplier);
         const autoDuration = Phaser.Math.Clamp(
-          durationMs,
-          FAST_MESSAGE_MIN_MS,
-          FAST_MESSAGE_MAX_MS
+          adjustedDuration,
+          Math.round(FAST_MESSAGE_MIN_MS * speedMultiplier),
+          Math.round(FAST_MESSAGE_MAX_MS * speedMultiplier)
         );
         this.activeMessageTimer = this.time.delayedCall(autoDuration, () => {
           this.resolveActiveMessage();

@@ -166,6 +166,8 @@ const BAG_ITEMS: Array<{ item: InventoryKey; label: string }> = [
 
 const FAST_MESSAGE_MIN_MS = 500;
 const FAST_MESSAGE_MAX_MS = 700;
+const COMBATANT_PANEL_PADDING = 12;
+const COMBATANT_PANEL_MARGIN = 8;
 
 export class BattleScene extends Phaser.Scene {
   private audio!: AudioSystem;
@@ -315,6 +317,8 @@ export class BattleScene extends Phaser.Scene {
   }
 
   public update(): void {
+    this.layoutCombatantPanels();
+
     if (this.activeMessageResolver) {
       if (this.inputAdapter.consume('confirm') || this.shiftKey.isDown) {
         this.resolveActiveMessage();
@@ -443,6 +447,7 @@ export class BattleScene extends Phaser.Scene {
       layout.playerPanelWidth,
       player
     );
+    this.layoutCombatantPanels();
   }
 
   private rebuildBattlePanel(): void {
@@ -629,6 +634,67 @@ export class BattleScene extends Phaser.Scene {
       layout.playerPanelWidth,
       player
     );
+    this.layoutCombatantPanels();
+  }
+
+  private layoutCombatantPanels(): void {
+    if (!this.playerSprite?.scene || !this.enemySprite?.scene) {
+      return;
+    }
+
+    if (!this.playerHpUi?.panel?.scene || !this.enemyHpUi?.panel?.scene) {
+      return;
+    }
+
+    this.placeCombatantPanelNearSprite(this.enemyHpUi, this.enemySprite);
+    this.placeCombatantPanelNearSprite(this.playerHpUi, this.playerSprite);
+  }
+
+  private placeCombatantPanelNearSprite(panel: HpBarUi, sprite: Phaser.GameObjects.Image): void {
+    const safe = getViewportManager().getSafeMargins();
+    const viewport = this.viewport;
+    const panelWidth = panel.panel.width;
+    const panelHeight = panel.panel.height;
+    const spriteBounds = sprite.getBounds();
+
+    const minX = viewport.x + safe.left + COMBATANT_PANEL_MARGIN;
+    const maxX = Math.max(
+      minX,
+      viewport.x + viewport.width - safe.right - panelWidth - COMBATANT_PANEL_MARGIN
+    );
+    const minY = viewport.y + safe.top + COMBATANT_PANEL_MARGIN;
+    const maxY = Math.max(
+      minY,
+      viewport.y + viewport.height - safe.bottom - panelHeight - COMBATANT_PANEL_MARGIN
+    );
+
+    const padding =
+      this.viewport.formFactor === 'mobile' && this.viewport.orientation === 'portrait'
+        ? COMBATANT_PANEL_PADDING - 2
+        : COMBATANT_PANEL_PADDING;
+
+    let x = spriteBounds.x + spriteBounds.width * 0.5 - panelWidth * 0.5;
+    let y = spriteBounds.y - panelHeight - padding;
+
+    if (y < minY) {
+      y = spriteBounds.y + spriteBounds.height + padding;
+    }
+
+    x = Phaser.Math.Clamp(x, minX, maxX);
+    y = Phaser.Math.Clamp(y, minY, maxY);
+
+    this.setCombatantPanelPosition(panel, Math.round(x), Math.round(y));
+  }
+
+  private setCombatantPanelPosition(panel: HpBarUi, x: number, y: number): void {
+    const panelWidth = panel.panel.width;
+    panel.panel.setPosition(x, y);
+    panel.title.setPosition(x + 10, y + 8);
+    panel.icon.setPosition(x + 6, y + 16);
+    panel.statusBadge.setPosition(x + panelWidth - 66, y + 8);
+    panel.track.setPosition(x + 10, y + 36);
+    panel.fill.setPosition(x + 10, y + 36);
+    panel.label.setPosition(x + 10, y + 52);
   }
 
   private createBattlePanel(): void {
@@ -3198,6 +3264,7 @@ export class BattleScene extends Phaser.Scene {
 
     this.resumeIdleBob('player');
     this.updatePlayerCombatantPanel(player);
+    this.layoutCombatantPanels();
   }
 
   private refreshEnemyVisual(): void {
@@ -3219,6 +3286,7 @@ export class BattleScene extends Phaser.Scene {
 
     this.resumeIdleBob('enemy');
     this.updateEnemyCombatantPanel(enemy);
+    this.layoutCombatantPanels();
   }
 
   private async playDamageAction(action: Extract<BattleAction, { type: 'damage' }>): Promise<void> {

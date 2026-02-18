@@ -632,3 +632,19 @@ Original prompt: Create a new folder "corebeasts-rpg" and build a working Phaser
   - `npm run lint` passed.
   - `npm run build` passed.
   - Skill smoke run executed with `web_game_playwright_client.js` (`output/boss-benchmark-smoke/shot-0.png`, `shot-1.png`, `state-0.json`, `state-1.json`) and no emitted `errors-*.json` artifacts.
+- Battle HUD overlap fix (monster status boxes covering sprites) implemented.
+  - File changed: `src/game/scenes/BattleScene.ts`.
+  - Replaced static panel anchoring behavior with sprite-bounds placement:
+    - compute sprite bounds via `sprite.getBounds()`.
+    - center panel horizontally over sprite.
+    - default Y above sprite with padding (`COMBATANT_PANEL_PADDING = 12`).
+    - if above would violate top safe area, flip below sprite.
+    - clamp panel X/Y to viewport + safe margins with margin (`COMBATANT_PANEL_MARGIN = 8`).
+  - Added per-frame HUD relayout in `update()` so panel stays non-overlapping while sprites animate/move.
+  - Triggered relayout on panel rebuild and visual refresh paths to handle sprite swaps/size changes.
+- Validation:
+  - `npm run lint` passes.
+  - `npm run build` passes.
+  - Playwright skill-loop capture generated `output/web-game/hud-fix/shot-0.png` and `output/web-game/hud-fix/state-0.json`.
+  - Visual check confirms both combatant status panels are associated with the correct sprite and no longer overlap sprite bodies.
+  - No runtime errors emitted (`output/web-game/hud-fix/errors-0.json` not present).
